@@ -1,4 +1,4 @@
-import streamlit as tf
+import streamlit as st
 import pandas as pd
 import io
 from parser_engine import locate_description_column, extract_marathi_property_details
