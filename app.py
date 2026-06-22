@@ -16,7 +16,6 @@ uploaded_file = st.file_uploader("Upload your property Excel or CSV file", type=
 
 if uploaded_file is not None:
     try:
-        # Ingest file content securely
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
@@ -24,7 +23,6 @@ if uploaded_file is not None:
             
         st.success(f"Successfully loaded file: {uploaded_file.name} ({len(df)} rows found)")
         
-        # Core Auto Detection Scan Routine
         detected_col = locate_description_column(df)
         all_columns = [str(c) for c in df.columns]
         
@@ -51,7 +49,6 @@ if uploaded_file is not None:
             
             for idx, row in df.iterrows():
                 raw_text = row[selected_column]
-                # Pass the complete row object to supply context fallback safety
                 extracted_metrics = extract_marathi_property_details(raw_text, row_context=row)
                 processed_rows.append(extracted_metrics)
                 
