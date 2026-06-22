@@ -1,38 +1,40 @@
 import re
 import pandas as pd
 
-# Layer 1: Brand name mapping definitions
+# Layer 1: Enhanced Brand and Connector Mapping Matrix
 OFFICIAL_BRAND_MAP = {
-    "रिजन्सी": "Regency",
-    "अनंतम": "Anantam",
-    "एनएक्सटी": "Nxt",
-    "फेज": "Phase",
-    "बिल्डिंग": "Building",
-    "इमारत": "Building",
-    "रोझेटा": "Rosetta",
-    "रुस्तमजी": "Rustomjee",
-    "लोढा": "Lodha",
-    "गोदरेज": "Godrej",
-    "शपूरजी": "Shapoorji",
-    "पल्लाडिओ": "Palladio",
-    "मजला": "Floor",
-    "सदनिका": "Flat",
+    "दि": "The",
+    "बाय": "By",
     "अेड्रेस": "Address",
     "जीएस": "GS",
     "टाॅवर": "Tower",
     "टॉवर": "Tower",
-    "गृहसंकुल": "Complex"
+    "बिल्डिंग": "Building",
+    "इमारत": "Building",
+    "गृहसंकुल": "Complex",
+    "प्रोजेक्ट": "Project",
+    "प्रकल्प": "Project",
+    "अनंतम": "Anantam",
+    "रिजन्सी": "Regency",
+    "एनएक्सटी": "Nxt",
+    "फेज": "Phase",
+    "मजला": "Floor",
+    "सदनिका": "Flat",
+    "युटीलिटी": "Utility",
+    "युटिलिटी": "Utility"
 }
 
 def universal_marathi_to_english(text):
     """
-    Converts Marathi Devanagari text strings into clean English titles phonetically.
+    Converts Marathi Devanagari text strings into clean English titles phonetically,
+    applying key corporate overrides.
     """
     if not text or pd.isna(text):
         return "Not Mentioned"
     
     text = str(text).strip()
     
+    # Process word-by-word or phrase-by-phrase overrides
     for regional_word, english_word in OFFICIAL_BRAND_MAP.items():
         text = text.replace(regional_word, english_word)
         
@@ -113,27 +115,27 @@ def locate_description_column(df):
 
 def extract_marathi_property_details(text, row_context=None):
     """
-    Robust property detail extraction routine featuring multi-unit conversion 
-    mechanisms and cross-tabular column reference fallbacks.
+    Robust property detail extraction engine. Handles multi-unit conversions (sq.m to sq.ft)
+    using a 10.76 multiplier, and applies tabular column rollbacks for maximum accuracy.
     """
     if pd.isna(text):
         text = ""
     text = str(text).strip()
     
-    # 1. Structural Project Name Extraction
+    # 1. Project Name Extraction (Updated boundaries to catch phrases like 'या गृहसंकुल')
     project_name = "Not Mentioned"
-    project_match = re.search(r'(?:वरील|येथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
+    project_match = re.search(r'(?:वरील|येथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
     if project_match:
         project_name = universal_marathi_to_english(project_match.group(1).strip())
     
-    # Fallback Option: Extract from existing tabular data if raw match comes up short
+    # Fallback Option: Cross-reference clean metadata columns from the sheet if the description pattern varies
     if (project_name == "Not Mentioned" or len(project_name) < 3) and row_context is not None:
         for fallback_col in ['Property', 'Property Name', 'Project', 'Developer']:
             if fallback_col in row_context and pd.notna(row_context[fallback_col]):
                 project_name = str(row_context[fallback_col]).strip()
                 break
 
-    # 2. Building and Tower Level Extraction 
+    # 2. Tower / Wing Extraction 
     tower = "Not Mentioned"
     tower_match = re.search(r'(?:बिल्डिंग\s+नं\.|इमारत\s+क्र\.|टॉवर\s*-\s*)\s*([0-9\w\-]+),(.*?)\s+(?:बिल्डिंग|इमारत|टॉवर)', text)
     if not tower_match:
@@ -158,22 +160,24 @@ def extract_marathi_property_details(text, row_context=None):
                 tower = str(row_context[fallback_col]).strip()
                 break
 
-    # 3. Dynamic Area Calculation Component (Handles sq ft and sq m tracking)
+    # 3. Component Space Metrics Extraction (Enforcing explicit 10.76 sq.m multiplier rules)
     carpet_area = 0.0
     balcony_area = 0.0
     utility_area = 0.0
     
-    # Carpet Target Checks
-    m_carpet = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:रेरा\s+)?का्?रपेट', text)
-    if not m_carpet:
-        m_carpet = re.search(r'(?:क्षेत्रफळ|चटईक्षेत्र)\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
-    if m_carpet:
-        carpet_area = float(m_carpet.group(1))
+    # --- Carpet Area Extraction ---
+    carpet_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:रेरा\s+)?(?:का्?रपेट|कारपेट)', text)
+    if not carpet_ft_match:
+        carpet_ft_match = re.search(r'(?:क्षेत्रफळ|चटईक्षेत्र)\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
+    if not carpet_ft_match:
+        carpet_ft_match = re.search(r'म्हणजेच\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
+        
+    if carpet_ft_match:
+        carpet_area = float(carpet_ft_match.group(1))
     else:
-        # Check for square meter metrics and convert
-        m_carpet_m = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:रेरा\s+)?का्?रपेट', text)
-        if m_carpet_m:
-            carpet_area = round(float(m_carpet_m.group(1)) * 10.7639, 2)
+        carpet_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:रेरा\s+)?(?:का्?रपेट|कारपेट)', text)
+        if carpet_m_match:
+            carpet_area = round(float(carpet_m_match.group(1)) * 10.76, 2)
             
     if carpet_area == 0.0 and row_context is not None:
         for fallback_col in ['Area', 'Total Usable Area (sq.ft.)', 'Carpet Area']:
@@ -184,31 +188,38 @@ def extract_marathi_property_details(text, row_context=None):
                 except:
                     pass
 
-    # Balcony Target Checks
-    m_balcony = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+सह\s*\+?\s*)?.*?बाल्कनी', text)
-    if not m_balcony:
-        m_balcony = re.search(r'बाल्कनी.*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
-    if m_balcony:
-        balcony_area = float(m_balcony.group(1))
+    # --- Balcony Area Extraction ---
+    balcony_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाची\s+)?बाल्कनी', text)
+    if not balcony_ft_match:
+        balcony_ft_match = re.search(r'बाल्कनी.*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
+        
+    if balcony_ft_match:
+        balcony_area = float(balcony_ft_match.group(1))
     else:
-        m_balcony_m = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:क्षेत्रफळाची\s+)?बाल्कनी', text)
-        if m_balcony_m:
-            balcony_area = round(float(m_balcony_m.group(1)) * 10.7639, 2)
+        balcony_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाची\s+)?बाल्कनी', text)
+        if not balcony_m_match:
+            balcony_m_match = re.search(r'बाल्कनी.*?\s*([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)', text)
+        if balcony_m_match:
+            balcony_area = round(float(balcony_m_match.group(1)) * 10.76, 2)
 
-    # Utility Target Checks
-    m_utility = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*.*?युटिलिटी', text)
-    if not m_utility:
-        m_utility = re.search(r'युटीलिटी.*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
-    if m_utility:
-        utility_area = float(m_utility.group(1))
+    # --- Utility Area Extraction ---
+    utility_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाचे\s+)?(?:युटीलिटी|युटिलिटी|ड्राय)', text)
+    if not utility_ft_match:
+        utility_ft_match = re.search(r'(?:युटीलिटी|युटिलिटी|ड्राय).*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
+        
+    if utility_ft_match:
+        utility_area = float(utility_ft_match.group(1))
     else:
-        m_utility_m = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:क्षेत्रफळाचे\s+)?युटीलिटी', text)
-        if m_utility_m:
-            utility_area = round(float(m_utility_m.group(1)) * 10.7639, 2)
+        utility_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाचे\s+)?(?:युटीलिटी|युटिलिटी|ड्राय)', text)
+        if not utility_m_match:
+            utility_m_match = re.search(r'(?:युटीलिटी|युटिलिटी|ड्राय).*?\s*([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)', text)
+        if utility_m_match:
+            utility_area = round(float(utility_m_match.group(1)) * 10.76, 2)
 
+    # Mathematical Summation Check
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
-    # 4. Parking Allocations Analysis 
+    # 4. Parking Allocation Scanner
     parking_desc = "0"
     if "दोन कार पार्किंग" in text or "two car parking" in text.lower():
         parking_desc = "2"
