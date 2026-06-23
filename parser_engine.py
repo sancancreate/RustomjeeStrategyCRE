@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 
-# Layer 1: Enhanced Brand and Connector Mapping Matrix
+# Layer 1: Enhanced Brand, Component, and Alphanumeric Phonetic Mapping Matrix
 OFFICIAL_BRAND_MAP = {
     "दि": "The",
     "बाय": "By",
@@ -21,7 +21,14 @@ OFFICIAL_BRAND_MAP = {
     "मजला": "Floor",
     "सदनिका": "Flat",
     "युटीलिटी": "Utility",
-    "युटिलिटी": "Utility"
+    "युटिलिटी": "Utility",
+    # Phonetic Unit/Wing Mapping Overrides
+    "एसएसडब्ल्यु": "SSW",
+    "टी": "T",
+    "ए": "A",
+    "बी": "B",
+    "सी": "C",
+    "डी": "D"
 }
 
 def universal_marathi_to_english(text):
@@ -115,7 +122,7 @@ def locate_description_column(df):
 def extract_marathi_property_details(text, row_context=None):
     """
     Robust property detail extraction engine. Parsed across multiple custom developer formats
-    including dynamic punctuation fixes and full square meter to square feet conversions.
+    including dynamic punctuation fixes, phonetic unit extensions, and square meter conversions.
     """
     if pd.isna(text):
         text = ""
@@ -123,7 +130,7 @@ def extract_marathi_property_details(text, row_context=None):
     
     # 1. Project Name Extraction
     project_name = "Not Mentioned"
-    project_match = re.search(r'(?:वरील|येथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
+    project_match = re.search(r'(?:वरील|yeथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
     if project_match:
         project_name = universal_marathi_to_english(project_match.group(1).strip())
     
@@ -138,17 +145,20 @@ def extract_marathi_property_details(text, row_context=None):
     tower_match = re.search(r'(?:बिल्डिंग\s+नं\.|इमारत\s+क्र\.|टॉवर\s*-\s*)\s*([0-9\w\-]+),(.*?)\s+(?:बिल्डिंग|इमारत|टॉवर)', text)
     if not tower_match:
         tower_match = re.search(r'(?:टॉवर\s*-\s*)\s*([0-9\w\-]+)', text)
+    if not tower_match:
+        # Explicit intercept for formats like टॉवर नं. 1ए or टॉवर नं.2बी
+        tower_match = re.search(r'(?:टॉवर|बिल्डिंग|विंग)\s*(?:नं|क्र)[\s.:-]*([A-Za-z0-9\u0900-\u097F]+)', text)
         
     if tower_match:
         groups = tower_match.groups()
         b_num = groups[0].strip() if len(groups) > 0 else ""
         raw_b_name = groups[1].strip() if (len(groups) > 1 and groups[1]) else ""
         if raw_b_name:
-            tower = f"Tower/Building {b_num} ({universal_marathi_to_english(raw_b_name)})"
+            tower = f"Tower/Building {universal_marathi_to_english(b_num)} ({universal_marathi_to_english(raw_b_name)})"
         else:
-            tower = f"Tower {b_num}"
+            tower = f"Tower {universal_marathi_to_english(b_num)}"
     else:
-        alt_tower = re.search(r'([A-Za-z0-9\s\-]+)\s*(?:विंग|टॉवर|टॉवर नं|इमारतीचे नाव)', text)
+        alt_tower = re.search(r'([A-Za-z0-9\u0900-\u097F\s\-]+)\s*(?:विंग|टॉवर|टॉवर नं|इमारतीचे नाव)', text)
         if alt_tower:
             tower = universal_marathi_to_english(alt_tower.group(0).strip())
             
@@ -173,13 +183,14 @@ def extract_marathi_property_details(text, row_context=None):
                 floor_no = str(row_context[fallback_col]).strip()
                 break
 
-    # 4. Unit / Flat Number Extraction (Supports mixed punctuation like . and : variations)
+    # 4. Unit / Flat Number Extraction (Supports embedded Devanagari text strings)
     unit_no = "Not Mentioned"
-    unit_match = re.search(r'(?:सदनिका|फ्लॅट|युनिट|निवासी\s+सदनिका)\s*(?:क्र|नं|नंबर|नो|no|num)?[\s.:-]*([A-Za-z0-9\-\/]+)', text)
+    unit_match = re.search(r'(?:सदनिका|फ्लॅट|युनिट|निवासी\s+सदनिका)\s*(?:क्र|नं|नंबर|नो|no|num)?[\s.:-]*([A-Za-z0-9\u0900-\u097F\-\/]+)', text)
     if not unit_match:
-        unit_match = re.search(r'(?:क्र|नं|नंबर|नो)[\s.:-]*([A-Za-z0-9\-\/]+)', text)
+        unit_match = re.search(r'(?:क्र|नं|नंबर|नो)[\s.:-]*([A-Za-z0-9\u0900-\u097F\-\/]+)', text)
+        
     if unit_match:
-        unit_no = unit_match.group(1).strip()
+        unit_no = universal_marathi_to_english(unit_match.group(1).strip())
         
     if unit_no == "Not Mentioned" and row_context is not None:
         for fallback_col in ['Unit no', 'Unit No', 'Unit', 'Unit Number', 'Flat No', 'Flat no']:
