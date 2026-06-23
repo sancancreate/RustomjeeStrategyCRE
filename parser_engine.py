@@ -114,8 +114,8 @@ def locate_description_column(df):
 
 def extract_marathi_property_details(text, row_context=None):
     """
-    Robust property detail extraction engine. Parses floor, unit, project, 
-    tower, areas, and parking with a 10.76 square meter conversion fallback.
+    Robust property detail extraction engine. Parsed across multiple custom developer formats
+    including dynamic punctuation fixes and full square meter to square feet conversions.
     """
     if pd.isna(text):
         text = ""
@@ -123,7 +123,7 @@ def extract_marathi_property_details(text, row_context=None):
     
     # 1. Project Name Extraction
     project_name = "Not Mentioned"
-    project_match = re.search(r'(?:वरील|yeथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
+    project_match = re.search(r'(?:वरील|येथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
     if project_match:
         project_name = universal_marathi_to_english(project_match.group(1).strip())
     
@@ -148,7 +148,7 @@ def extract_marathi_property_details(text, row_context=None):
         else:
             tower = f"Tower {b_num}"
     else:
-        alt_tower = re.search(r'([A-Za-z0-9\s\-]+)\s*(?:विंग|टॉवर|टॉवर नं)', text)
+        alt_tower = re.search(r'([A-Za-z0-9\s\-]+)\s*(?:विंग|टॉवर|टॉवर नं|इमारतीचे नाव)', text)
         if alt_tower:
             tower = universal_marathi_to_english(alt_tower.group(0).strip())
             
@@ -158,11 +158,12 @@ def extract_marathi_property_details(text, row_context=None):
                 tower = str(row_context[fallback_col]).strip()
                 break
 
-    # 3. Floor Number Extraction
+    # 3. Floor Number Extraction (Punctuation and suffix-agnostic match pattern)
     floor_no = "Not Mentioned"
-    floor_match = re.search(r'(\d+)\s*(?:व्या|्या|वे|वेळ|st|nd|rd|th)?\s*मजला', text)
+    floor_match = re.search(r'(\d+)\s*[\u0900-\u097Fa-zA-Z]*\s*(?:मजला|मजल्यावरील|माळा)', text)
     if not floor_match:
-        floor_match = re.search(r'(\d+)\s*(?:व्या|्या|वे|वेळ|st|nd|rd|th)?\s*मजल्यावरील', text)
+        floor_match = re.search(r'(?:माळा नं|मजला नं)[\s.:-]*(\d+)', text)
+        
     if floor_match:
         floor_no = floor_match.group(1).strip()
         
@@ -172,11 +173,11 @@ def extract_marathi_property_details(text, row_context=None):
                 floor_no = str(row_context[fallback_col]).strip()
                 break
 
-    # 4. Unit / Flat Number Extraction
+    # 4. Unit / Flat Number Extraction (Supports mixed punctuation like . and : variations)
     unit_no = "Not Mentioned"
-    unit_match = re.search(r'(?:सदनिका|फ्लॅट|निवासी\s+सदनिका)\s*(?:क्र\.|नं\.|नंबर)?\s*([A-Za-z0-9\-\/]+)', text)
+    unit_match = re.search(r'(?:सदनिका|फ्लॅट|युनिट|निवासी\s+सदनिका)\s*(?:क्र|नं|नंबर|नो|no|num)?[\s.:-]*([A-Za-z0-9\-\/]+)', text)
     if not unit_match:
-        unit_match = re.search(r'(?:सदनिका\s+क्र\.|क्र\.)\s*([A-Za-z0-9\-\/]+)', text)
+        unit_match = re.search(r'(?:क्र|नं|नंबर|नो)[\s.:-]*([A-Za-z0-9\-\/]+)', text)
     if unit_match:
         unit_no = unit_match.group(1).strip()
         
@@ -186,7 +187,7 @@ def extract_marathi_property_details(text, row_context=None):
                 unit_no = str(row_context[fallback_col]).strip()
                 break
 
-    # 5. Component Space Metrics Extraction
+    # 5. Component Space Metrics Extraction (Enforcing 10.76 Sq.M multiplier rules)
     carpet_area = 0.0
     balcony_area = 0.0
     utility_area = 0.0
