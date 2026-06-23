@@ -9,7 +9,7 @@ st.title("📋 Marathi Property Data Extractor Dashboard")
 st.subheader("Transform unstructured regional language descriptions into clean English metrics instantly.")
 
 st.markdown("""
-This tool automatically parses uploaded property spreadsheets. It targets Marathi legal descriptions, isolates vital metrics like project identity, wings, component areas, and parking allocations, and builds an aggregate summary spreadsheet ready for instant download.
+This tool automatically parses uploaded property spreadsheets. It targets Marathi legal descriptions, isolates vital metrics like project identity, wings, floor levels, unit numbers, component areas, and parking allocations, and builds an aggregate summary spreadsheet ready for instant download.
 """)
 
 uploaded_file = st.file_uploader("Upload your property Excel or CSV file", type=["xlsx", "xls", "csv"])
@@ -67,7 +67,11 @@ if uploaded_file is not None:
             
             st.markdown("---")
             st.subheader("👀 Extracted Data Preview (Clean English Metrics)")
-            columns_to_show = ['Project Name', 'Tower Number', 'Carpet Area (sq ft)', 'Balcony Area (sq ft)', 'Utility Area (sq ft)', 'Total Area (sq ft)', 'Parking Space']
+            columns_to_show = [
+                'Project Name', 'Tower Number', 'Floor Number', 'Unit Number', 
+                'Carpet Area (sq ft)', 'Balcony Area (sq ft)', 'Utility Area (sq ft)', 
+                'Total Area (sq ft)', 'Parking Space'
+            ]
             st.dataframe(output_df[columns_to_show].head(10))
             
             buffer = io.BytesIO()
@@ -76,7 +80,7 @@ if uploaded_file is not None:
             buffer.seek(0)
             
             st.markdown("### 📥 Download Isolated Results")
-            st.markdown("This download contains strictly the 7 parameters extracted and parsed from your source document description field.")
+            st.markdown("This download contains strictly the parameters extracted and parsed from your source document description field.")
             st.download_button(
                 label="Download Isolated Clean Excel File",
                 data=buffer,
