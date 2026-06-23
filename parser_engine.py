@@ -34,7 +34,6 @@ def universal_marathi_to_english(text):
     
     text = str(text).strip()
     
-    # Process word-by-word or phrase-by-phrase overrides
     for regional_word, english_word in OFFICIAL_BRAND_MAP.items():
         text = text.replace(regional_word, english_word)
         
@@ -115,20 +114,19 @@ def locate_description_column(df):
 
 def extract_marathi_property_details(text, row_context=None):
     """
-    Robust property detail extraction engine. Handles multi-unit conversions (sq.m to sq.ft)
-    using a 10.76 multiplier, and applies tabular column rollbacks for maximum accuracy.
+    Robust property detail extraction engine. Parses floor, unit, project, 
+    tower, areas, and parking with a 10.76 square meter conversion fallback.
     """
     if pd.isna(text):
         text = ""
     text = str(text).strip()
     
-    # 1. Project Name Extraction (Updated boundaries to catch phrases like 'या गृहसंकुल')
+    # 1. Project Name Extraction
     project_name = "Not Mentioned"
-    project_match = re.search(r'(?:वरील|येथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
+    project_match = re.search(r'(?:वरील|yeथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
     if project_match:
         project_name = universal_marathi_to_english(project_match.group(1).strip())
     
-    # Fallback Option: Cross-reference clean metadata columns from the sheet if the description pattern varies
     if (project_name == "Not Mentioned" or len(project_name) < 3) and row_context is not None:
         for fallback_col in ['Property', 'Property Name', 'Project', 'Developer']:
             if fallback_col in row_context and pd.notna(row_context[fallback_col]):
@@ -160,12 +158,40 @@ def extract_marathi_property_details(text, row_context=None):
                 tower = str(row_context[fallback_col]).strip()
                 break
 
-    # 3. Component Space Metrics Extraction (Enforcing explicit 10.76 sq.m multiplier rules)
+    # 3. Floor Number Extraction
+    floor_no = "Not Mentioned"
+    floor_match = re.search(r'(\d+)\s*(?:व्या|्या|वे|वेळ|st|nd|rd|th)?\s*मजला', text)
+    if not floor_match:
+        floor_match = re.search(r'(\d+)\s*(?:व्या|्या|वे|वेळ|st|nd|rd|th)?\s*मजल्यावरील', text)
+    if floor_match:
+        floor_no = floor_match.group(1).strip()
+        
+    if floor_no == "Not Mentioned" and row_context is not None:
+        for fallback_col in ['Floor no', 'Floor No', 'Floor', 'Floor Number']:
+            if fallback_col in row_context and pd.notna(row_context[fallback_col]):
+                floor_no = str(row_context[fallback_col]).strip()
+                break
+
+    # 4. Unit / Flat Number Extraction
+    unit_no = "Not Mentioned"
+    unit_match = re.search(r'(?:सदनिका|फ्लॅट|निवासी\s+सदनिका)\s*(?:क्र\.|नं\.|नंबर)?\s*([A-Za-z0-9\-\/]+)', text)
+    if not unit_match:
+        unit_match = re.search(r'(?:सदनिका\s+क्र\.|क्र\.)\s*([A-Za-z0-9\-\/]+)', text)
+    if unit_match:
+        unit_no = unit_match.group(1).strip()
+        
+    if unit_no == "Not Mentioned" and row_context is not None:
+        for fallback_col in ['Unit no', 'Unit No', 'Unit', 'Unit Number', 'Flat No', 'Flat no']:
+            if fallback_col in row_context and pd.notna(row_context[fallback_col]):
+                unit_no = str(row_context[fallback_col]).strip()
+                break
+
+    # 5. Component Space Metrics Extraction
     carpet_area = 0.0
     balcony_area = 0.0
     utility_area = 0.0
     
-    # --- Carpet Area Extraction ---
+    # Carpet Extraction
     carpet_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:रेरा\s+)?(?:का्?रपेट|कारपेट)', text)
     if not carpet_ft_match:
         carpet_ft_match = re.search(r'(?:क्षेत्रफळ|चटईक्षेत्र)\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
@@ -188,7 +214,7 @@ def extract_marathi_property_details(text, row_context=None):
                 except:
                     pass
 
-    # --- Balcony Area Extraction ---
+    # Balcony Extraction
     balcony_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाची\s+)?बाल्कनी', text)
     if not balcony_ft_match:
         balcony_ft_match = re.search(r'बाल्कनी.*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
@@ -202,7 +228,7 @@ def extract_marathi_property_details(text, row_context=None):
         if balcony_m_match:
             balcony_area = round(float(balcony_m_match.group(1)) * 10.76, 2)
 
-    # --- Utility Area Extraction ---
+    # Utility Extraction
     utility_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाचे\s+)?(?:युटीलिटी|युटिलिटी|ड्राय)', text)
     if not utility_ft_match:
         utility_ft_match = re.search(r'(?:युटीलिटी|युटिलिटी|ड्राय).*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
@@ -216,10 +242,9 @@ def extract_marathi_property_details(text, row_context=None):
         if utility_m_match:
             utility_area = round(float(utility_m_match.group(1)) * 10.76, 2)
 
-    # Mathematical Summation Check
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
-    # 4. Parking Allocation Scanner
+    # 6. Parking Allocation Scanner
     parking_desc = "0"
     if "दोन कार पार्किंग" in text or "two car parking" in text.lower():
         parking_desc = "2"
@@ -233,6 +258,8 @@ def extract_marathi_property_details(text, row_context=None):
     return {
         'Project Name': project_name,
         'Tower Number': tower,
+        'Floor Number': floor_no,
+        'Unit Number': unit_no,
         'Carpet Area (sq ft)': carpet_area,
         'Balcony Area (sq ft)': balcony_area,
         'Utility Area (sq ft)': utility_area,
