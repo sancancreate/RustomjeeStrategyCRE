@@ -67,11 +67,16 @@ if uploaded_file is not None:
             
             st.markdown("---")
             st.subheader("👀 Extracted Data Preview (Clean English Metrics)")
-            columns_to_show = [
+            
+            # Master target list of columns to display
+            target_columns = [
                 'Project Name', 'Tower Number', 'Floor Number', 'Unit Number', 
                 'Carpet Area (sq ft)', 'Balcony Area (sq ft)', 'Utility Area (sq ft)', 
                 'Total Area (sq ft)', 'Parking Space'
             ]
+            
+            # Dynamic safety check: Only slice columns that exist in the active dataframe
+            columns_to_show = [col for col in target_columns if col in output_df.columns]
             st.dataframe(output_df[columns_to_show].head(10))
             
             buffer = io.BytesIO()
