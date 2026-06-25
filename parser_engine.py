@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 
-# Layer 1: Enhanced Brand, Component, and Alphanumeric Phonetic Mapping Matrix
+# Layer 1: Brand, Component, and Alphanumeric Phonetic Mapping Matrix
 OFFICIAL_BRAND_MAP = {
     "दि": "The",
     "बाय": "By",
@@ -22,7 +22,6 @@ OFFICIAL_BRAND_MAP = {
     "सदनिका": "Flat",
     "युटीलिटी": "Utility",
     "युटिलिटी": "Utility",
-    # Phonetic Unit/Wing Mapping Overrides
     "एसएसडब्ल्यु": "SSW",
     "टी": "T",
     "ए": "A",
@@ -30,6 +29,23 @@ OFFICIAL_BRAND_MAP = {
     "सी": "C",
     "डी": "D"
 }
+
+def safe_float(val):
+    """
+    Safely converts a string to a float. Isolates clean numeric groups 
+    to handle typos like duplicate decimal points (e.g., '.44.59').
+    """
+    if pd.isna(val) or not val:
+        return 0.0
+    try:
+        cleaned = str(val).strip().strip('.')
+        # Isolate the first clean float representation sequence found
+        match = re.search(r'\d+(?:\.\d+)?', cleaned)
+        if match:
+            return float(match.group(0))
+        return 0.0
+    except Exception:
+        return 0.0
 
 def universal_marathi_to_english(text):
     """
@@ -121,8 +137,7 @@ def locate_description_column(df):
 
 def extract_marathi_property_details(text, row_context=None):
     """
-    Robust property detail extraction engine. Parsed across multiple custom developer formats
-    including dynamic punctuation fixes, phonetic unit extensions, and square meter conversions.
+    Robust property detail extraction engine protected against data-entry formatting errors.
     """
     if pd.isna(text):
         text = ""
@@ -146,7 +161,6 @@ def extract_marathi_property_details(text, row_context=None):
     if not tower_match:
         tower_match = re.search(r'(?:टॉवर\s*-\s*)\s*([0-9\w\-]+)', text)
     if not tower_match:
-        # Explicit intercept for formats like टॉवर नं. 1ए or टॉवर नं.2बी
         tower_match = re.search(r'(?:टॉवर|बिल्डिंग|विंग)\s*(?:नं|क्र)[\s.:-]*([A-Za-z0-9\u0900-\u097F]+)', text)
         
     if tower_match:
@@ -168,7 +182,7 @@ def extract_marathi_property_details(text, row_context=None):
                 tower = str(row_context[fallback_col]).strip()
                 break
 
-    # 3. Floor Number Extraction (Punctuation and suffix-agnostic match pattern)
+    # 3. Floor Number Extraction
     floor_no = "Not Mentioned"
     floor_match = re.search(r'(\d+)\s*[\u0900-\u097Fa-zA-Z]*\s*(?:मजला|मजल्यावरील|माळा)', text)
     if not floor_match:
@@ -183,7 +197,7 @@ def extract_marathi_property_details(text, row_context=None):
                 floor_no = str(row_context[fallback_col]).strip()
                 break
 
-    # 4. Unit / Flat Number Extraction (Supports embedded Devanagari text strings)
+    # 4. Unit / Flat Number Extraction
     unit_no = "Not Mentioned"
     unit_match = re.search(r'(?:सदनिका|फ्लॅट|युनिट|निवासी\s+सदनिका)\s*(?:क्र|नं|नंबर|नो|no|num)?[\s.:-]*([A-Za-z0-9\u0900-\u097F\-\/]+)', text)
     if not unit_match:
@@ -198,7 +212,7 @@ def extract_marathi_property_details(text, row_context=None):
                 unit_no = str(row_context[fallback_col]).strip()
                 break
 
-    # 5. Component Space Metrics Extraction (Enforcing 10.76 Sq.M multiplier rules)
+    # 5. Component Space Metrics Extraction
     carpet_area = 0.0
     balcony_area = 0.0
     utility_area = 0.0
@@ -211,20 +225,18 @@ def extract_marathi_property_details(text, row_context=None):
         carpet_ft_match = re.search(r'म्हणजेच\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
         
     if carpet_ft_match:
-        carpet_area = float(carpet_ft_match.group(1))
+        carpet_area = safe_float(carpet_ft_match.group(1))
     else:
         carpet_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:रेरा\s+)?(?:का्?रपेट|कारपेट)', text)
         if carpet_m_match:
-            carpet_area = round(float(carpet_m_match.group(1)) * 10.76, 2)
+            carpet_area = round(safe_float(carpet_m_match.group(1)) * 10.76, 2)
             
     if carpet_area == 0.0 and row_context is not None:
         for fallback_col in ['Area', 'Total Usable Area (sq.ft.)', 'Carpet Area']:
             if fallback_col in row_context and pd.notna(row_context[fallback_col]):
-                try:
-                    carpet_area = float(row_context[fallback_col])
+                carpet_area = safe_float(row_context[fallback_col])
+                if carpet_area > 0.0:
                     break
-                except:
-                    pass
 
     # Balcony Extraction
     balcony_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाची\s+)?बाल्कनी', text)
@@ -232,13 +244,13 @@ def extract_marathi_property_details(text, row_context=None):
         balcony_ft_match = re.search(r'बाल्कनी.*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
         
     if balcony_ft_match:
-        balcony_area = float(balcony_ft_match.group(1))
+        balcony_area = safe_float(balcony_ft_match.group(1))
     else:
         balcony_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाची\s+)?बाल्कनी', text)
         if not balcony_m_match:
             balcony_m_match = re.search(r'बाल्कनी.*?\s*([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)', text)
         if balcony_m_match:
-            balcony_area = round(float(balcony_m_match.group(1)) * 10.76, 2)
+            balcony_area = round(safe_float(balcony_m_match.group(1)) * 10.76, 2)
 
     # Utility Extraction
     utility_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाचे\s+)?(?:युटीलिटी|युटिलिटी|ड्राय)', text)
@@ -246,13 +258,13 @@ def extract_marathi_property_details(text, row_context=None):
         utility_ft_match = re.search(r'(?:युटीलिटी|युटिलिटी|ड्राय).*?\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
         
     if utility_ft_match:
-        utility_area = float(utility_ft_match.group(1))
+        utility_area = safe_float(utility_ft_match.group(1))
     else:
         utility_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:एरिया\s+)?(?:क्षेत्रफळाचे\s+)?(?:युटीलिटी|युटिलिटी|ड्राय)', text)
         if not utility_m_match:
             utility_m_match = re.search(r'(?:युटीलिटी|युटिलिटी|ड्राय).*?\s*([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)', text)
         if utility_m_match:
-            utility_area = round(float(utility_m_match.group(1)) * 10.76, 2)
+            utility_area = round(safe_float(utility_m_match.group(1)) * 10.76, 2)
 
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
