@@ -13,7 +13,6 @@ MARATHI_FLOOR_WORDS = {
     "सहावा": "6", "सातवा": "7", "आठवा": "8", "नवा": "9", "दहावा": "10"
 }
 
-# Extensive variations for spelling normalization
 CARPET_KEYWORDS = ["कार्पेट", "कारपेट", "चटई", "carpet"]
 BALCONY_KEYWORDS = ["बाल्कनी", "बालकॉनी", "गॅलरी", "गॅलरी", "गॅलेरी", "balcony", "gallery"]
 UTILITY_KEYWORDS = ["युटिलिटी", "युटीलिटी", "युटिलीटी", "ड्राय", "सर्व्हिस", "utility", "dry"]
@@ -22,7 +21,6 @@ def clean_and_normalize_text(text):
     if pd.isna(text): 
         return ""
     text = str(text).strip()
-    # Standardize Devnagari digits to Western Arabic numerals
     for dev, eng in DEVANAGARI_DIGITS.items():
         text = text.replace(dev, eng)
     return text
@@ -31,7 +29,6 @@ def convert_to_sqft(value_str, unit_str):
     try:
         val = float(value_str)
         unit_str = str(unit_str).lower()
-        # If unit contains common representations of Sq. Meters, convert to Sq. Feet
         if any(m in unit_str for m in ['मी', 'मीटर', 'm', 'mtr', 'mtrs']):
             return round(val * 10.7639, 2)
         return round(val, 2)
@@ -39,28 +36,20 @@ def convert_to_sqft(value_str, unit_str):
         return 0.0
 
 def extract_area_metric(text, keywords):
-    """
-    Robust area extractor that scans text for both ordering scenarios:
-    1. Keyword followed by Area Number (e.g., 'कार्पेट क्षेत्रफळ 41.5 चौ.मी.')
-    2. Area Number followed by Keyword (e.g., '41.5 चौ.मी. कार्पेट')
-    """
     kw_pattern = "|".join(keywords)
     
     # Pattern Variant A: Number + Unit + Optional Text + Keyword
-    # e.g., "41.5 चौ.मी. कार्पेट" or "41.5 चौ.मी. क्षेत्रफळ चटई"
     pattern_a = rf"(\d+(?:\.\d+)?)\s*([^\s,]*)\s*(?:क्षेत्रफळ|एरिया|क्षेत्र)?\s*(?:{kw_pattern})"
     match_a = re.search(pattern_a, text, re.IGNORECASE)
     if match_a:
         return convert_to_sqft(match_a.group(1), match_a.group(2))
 
     # Pattern Variant B: Keyword + Optional descriptive words + Number + Unit
-    # e.g., "कार्पेट क्षेत्रफळ: 41.5 चौ.मी."
-    pattern_b = rf"(?:{kw_pattern})\s*(?:क्षेत्रफळ|एरिया|क्षेत्र)?\s*(?:नं|क्र)?\s*[:\-\=]?\s*(\d+(?:\.\d+)?)\s*([^\s,]*)"
+    pattern_b = rf"(?:{kw_pattern})\s*(?:क्षेत्रफळ|एरिया|क्षेत्र)?\s*(?:ं|क्र)?\s*[:\-\=]?\s*(\d+(?:\.\d+)?)\s*([^\s,]*)"
     match_b = re.search(pattern_b, text, re.IGNORECASE)
     if match_b:
         return convert_to_sqft(match_b.group(1), match_b.group(2))
         
-    # Pattern Variant C: Generic "क्षेत्रफळ" lookup if we are seeking carpet area and nothing else matched
     if "कार्पेट" in keywords:
         pattern_c = r"क्षेत्रफळ\s*(\d+(?:\.\d+)?)\s*([^\s,]*)"
         match_c = re.search(pattern_c, text, re.IGNORECASE)
@@ -69,29 +58,35 @@ def extract_area_metric(text, keywords):
 
     return 0.0
 
-def locate_description_column(df):
-    possible_targets = ['property description', 'description', 'वर्णन', 'मालमत्ता वर्णन', 'column_0', 'column_1']
+def locate_column_by_keywords(df, keywords):
+    """Helper to auto-detect columns based on lists of possible keyword names"""
     for col in df.columns:
-        if any(t in str(col).lower() for t in possible_targets): 
+        if any(k in str(col).lower() for k in keywords): 
             return col
     return None
 
-def extract_marathi_property_details(raw_text, row_context=None):
+def extract_marathi_property_details(raw_text, row_context=None, project_col=None, tower_col=None, unit_col=None):
     text = clean_and_normalize_text(raw_text)
     
-    # 1. Project Identity Extraction
+    # 1. Project Identity Extraction (Direct column grab with text fallback)
     project_name = "Not Mentioned"
-    project_match = re.search(r'([\w\s\-]+?)\s*(?:प्रोजेक्ट|फेज|प्रकल्प|गार्डन्स|रेसिडेन्सी)', text, re.IGNORECASE)
-    if project_match:
-        project_name = project_match.group(1).strip()
+    if row_context is not None and project_col in row_context and pd.notna(row_context[project_col]):
+        project_name = str(row_context[project_col]).strip()
+    else:
+        project_match = re.search(r'([\w\s\-]+?)\s*(?:प्रोजेक्ट|फेज|प्रकल्प|गार्डन्स|रेसिडेन्सी)', text, re.IGNORECASE)
+        if project_match:
+            project_name = project_match.group(1).strip()
 
-    # 2. Tower / Building Target Extraction
-    tower_num = "Not Mentioned"
-    tower_match = re.search(r'(?:बिल्डिंग|बिल्डींग|टाॅवर|टॉवर|विंग|बिल्डिंग नं)\s*(?:नं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
-    if tower_match:
-        tower_num = tower_match.group(1).strip()
+    # 2. Tower / Wing Target Extraction (Direct column grab with text fallback)
+    tower_wing = "Not Mentioned"
+    if row_context is not None and tower_col in row_context and pd.notna(row_context[tower_col]):
+        tower_wing = str(row_context[tower_col]).strip()
+    else:
+        tower_match = re.search(r'(?:बिल्डिंग|बिल्डींग|टाॅवर|टॉवर|विंग|बिल्डिंग नं)\s*(?:नं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
+        if tower_match:
+            tower_wing = tower_match.group(1).strip()
 
-    # 3. Floor Level Extraction
+    # 3. Floor Level Extraction (Stays on text parser since it works well)
     floor_num = "Not Mentioned"
     floor_match = re.search(r'([A-Za-z0-9\u0900-\u097F]+)\s*(?:मजला|फ्लोअर)', text, re.IGNORECASE)
     if floor_match:
@@ -106,11 +101,14 @@ def extract_marathi_property_details(raw_text, row_context=None):
                 floor_num = replacement
                 break
 
-    # 4. Unit / Flat Number Extraction
+    # 4. Unit / Flat Number Extraction (Direct column grab with text fallback)
     unit_num = "Not Mentioned"
-    unit_match = re.search(r'(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा)\s*(?:नं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
-    if unit_match:
-        unit_num = unit_match.group(1).strip()
+    if row_context is not None and unit_col in row_context and pd.notna(row_context[unit_col]):
+        unit_num = str(row_context[unit_col]).strip()
+    else:
+        unit_match = re.search(r'(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा)\s*(?:नं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
+        if unit_match:
+            unit_num = unit_match.group(1).strip()
 
     # 5. Advanced Component Area Extractions
     carpet_area = extract_area_metric(text, CARPET_KEYWORDS)
@@ -118,7 +116,7 @@ def extract_marathi_property_details(raw_text, row_context=None):
     utility_area = extract_area_metric(text, UTILITY_KEYWORDS)
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
-    # 6. Parking Allocation Scanner (Incorporated Look-Behind Excel Formula Logic)
+    # 6. Parking Allocation Scanner
     parking_val = 0
     triggers = ["फोर व्हीलर", "फोर व्हिलर", "कार पार्किंग", "कार पार्कींग"]
     found_trigger_idx = -1
@@ -150,7 +148,7 @@ def extract_marathi_property_details(raw_text, row_context=None):
 
     return {
         'Project Name': project_name,
-        'Tower Number': tower_num,
+        'Tower/Wing': tower_wing,
         'Floor Number': floor_num,
         'Unit Number': unit_num,
         'Carpet Area (sq ft)': carpet_area,
