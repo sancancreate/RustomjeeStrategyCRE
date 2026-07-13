@@ -10,99 +10,82 @@ from parser_engine import locate_description_column, extract_marathi_property_de
 
 st.set_page_config(page_title="Marathi Property Data Extractor", layout="wide")
 
-st.title("📊 Marathi Property Data Extractor Dashboard")
-st.subheader("Transform unstructured regional language descriptions into clean English metrics instantly.")
-
-st.markdown("""
-This tool automatically parses uploaded property spreadsheets. It targets Marathi legal descriptions, isolates vital metrics, and builds an aggregate summary spreadsheet.
-""")
+st.title("📊 Marathi Property Data Extractor")
 
 uploaded_file = st.file_uploader("Upload your property Excel or CSV file", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
     try:
         # --- HEADER CONTROL ---
-        # If your file has no headers or weird text at the top, uncheck this box
-        has_header = st.checkbox("File has valid column headers (row 1)", value=True)
+        # Default to False if you find errors, to treat the first row as data
+        has_header = st.checkbox("File has valid column headers (row 1)", value=False)
         
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, header=0 if has_header else None)
         else:
             df = pd.read_excel(uploaded_file, header=0 if has_header else None)
         
-        # If no header, force numeric column names to prevent errors
+        # If we treat the first row as data, assign generic column names
         if not has_header:
             df.columns = [f"Column_{i}" for i in range(len(df.columns))]
             
-        st.success(f"Successfully loaded file: {uploaded_file.name} ({len(df)} rows found)")
+        st.success(f"File loaded: {uploaded_file.name} ({len(df)} rows)")
         
-        # --- ROBUST COLUMN DETECTION ---
+        # --- CRASH-PROOF COLUMN DETECTION ---
         all_columns = [str(c) for c in df.columns]
         detected_col = locate_description_column(df)
         
-        # Safely find the index without crashing
+        # Safely find the index
         default_idx = 0
-        if detected_col and detected_col in all_columns:
-            default_idx = all_columns.index(detected_col)
+        if detected_col:
+            for i, col in enumerate(all_columns):
+                # Using a loose check to avoid 'is not in list' errors
+                if str(detected_col) in col:
+                    default_idx = i
+                    break
         else:
-            st.warning("Could not auto-detect the description column. Please select it manually below.")
+            st.warning("Could not auto-detect column. Please select it manually below.")
             
-        st.markdown("### 🔍 Column Target Settings")
+        st.markdown("### 🔍 Select the Description Column")
         selected_column = st.selectbox(
-            "Select the property description field:",
+            "Which column contains the Property Description?",
             options=all_columns,
             index=default_idx
         )
         
         st.info(f"Active Extraction Target: **'{selected_column}'**")
         
-        if st.button("🚀 Process and Segregate Data", type="primary"):
+        if st.button("🚀 Process Data", type="primary"):
             processed_rows = []
+            total_rows = len(df)
             progress_bar = st.progress(0)
             status_text = st.empty()
-            total_rows = len(df)
             
             for idx, row in df.iterrows():
-                raw_text = row[selected_column]
+                # Extract using the column name selected by the user
+                raw_text = str(row[selected_column])
                 extracted_metrics = extract_marathi_property_details(raw_text, row_context=row)
                 processed_rows.append(extracted_metrics)
                 
-                if idx % max(1, total_rows // 20) == 0 or idx == total_rows - 1:
-                    progress_percent = int(((idx + 1) / total_rows) * 100)
-                    progress_bar.progress(progress_percent)
+                if idx % 5 == 0:
+                    progress_bar.progress((idx + 1) / total_rows)
                     status_text.text(f"Processing row {idx + 1} of {total_rows}...")
             
             extracted_df = pd.DataFrame(processed_rows)
             st.session_state['processed_data'] = extracted_df
-            status_text.text("Processing Complete!")
             st.balloons()
+            st.success("Processing Complete!")
         
         if 'processed_data' in st.session_state:
-            output_df = st.session_state['processed_data']
-            st.markdown("---")
-            st.subheader("📋 Extracted Data Preview")
+            st.dataframe(st.session_state['processed_data'].head(10))
             
-            target_columns = [
-                'Project Name', 'Tower Number', 'Floor Number', 'Unit Number', 
-                'Carpet Area (sq ft)', 'Balcony Area (sq ft)', 'Utility Area (sq ft)', 
-                'Total Area (sq ft)', 'Parking Space'
-            ]
-            
-            columns_to_show = [col for col in target_columns if col in output_df.columns]
-            st.dataframe(output_df[columns_to_show].head(10))
-            
+            # Download Logic
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                output_df.to_excel(writer, index=False, sheet_name='Summary English Report')
+                st.session_state['processed_data'].to_excel(writer, index=False)
             buffer.seek(0)
             
-            st.markdown("### 💾 Download Isolated Results")
-            st.download_button(
-                label="Download Isolated Clean Excel File",
-                data=buffer,
-                file_name=f"Clean_Summary_{uploaded_file.name.split('.')[0]}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("Download Clean Excel", buffer, "Clean_Summary.xlsx", "application/vnd.ms-excel")
             
     except Exception as e:
-        st.error(f"An unexpected data processing error occurred: {e}")
+        st.error(f"Error: {e}")
