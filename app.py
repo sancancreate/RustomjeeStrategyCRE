@@ -108,7 +108,7 @@ if uploaded_file is not None:
             st.subheader("📋 Extracted Data Preview")
             
             target_columns = [
-                'Project Name', 'Tower/Wing', 'Floor Number', 'Unit Number', 
+                'Project Name', 'Tower/Wing', 'Unit Number', 
                 'Carpet Area (sq ft)', 'Balcony Area (sq ft)', 'Utility Area (sq ft)', 
                 'Total Area (sq ft)', 'Parking Space'
             ]
