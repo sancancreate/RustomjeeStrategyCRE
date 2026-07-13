@@ -46,6 +46,7 @@ if uploaded_file is not None:
             return fallback
 
         st.markdown("### 🔍 Column Target Mapping Settings")
+        st.write("Match up your spreadsheet columns below. The tool uses direct column mapping for Project, Tower, and Unit properties for 100% data reliability.")
         
         col1, col2 = st.columns(2)
         
