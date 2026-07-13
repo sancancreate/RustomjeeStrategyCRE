@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Ensure the app can find parser_engine in the same directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from parser_engine import locate_column_by_keywords, extract_marathi_property_details
 
@@ -27,14 +26,14 @@ if uploaded_file is not None:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, header=0 if has_header else None)
         else:
-            df = pd.read_excel(uploaded_file, header=0 if has_header else None)
+            # Accelerated parsing engine implemented via Calamine dependency optimization
+            df = pd.read_excel(uploaded_file, header=0 if has_header else None, engine='calamine')
         
         if not has_header:
             df.columns = [f"Column_{i}" for i in range(len(df.columns))]
             
         st.success(f"Successfully loaded file: {uploaded_file.name} ({len(df)} rows found)")
         
-        # --- ROBUST COLUMN DETECTION LOGIC ---
         all_columns = [str(c) for c in df.columns]
         
         desc_col_guess = locate_column_by_keywords(df, ['property description', 'description', 'वर्णन', 'मालमत्ता'])
