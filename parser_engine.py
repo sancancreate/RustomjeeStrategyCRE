@@ -22,7 +22,7 @@ MARATHI_FLOOR_WORDS = {
     "दहावा": "10", "दहावे": "10", "दहाव्या": "10",
     "अकरावा": "11", "अकरावे": "11", "अकराव्या": "11",
     "बारावा": "12", "बारावे": "12", "बाराव्या": "12",
-    "तेरावा": "13", "तेरावे": "13", "तेराव्या": "13",
+    "तेरावा": "13", "तेраवे": "13", "तेराव्या": "13",
     "चौदावा": "14", "चौदावे": "14", "चौदाव्या": "14",
     "पंधरावा": "15", "पंधरावे": "15", "पंधराव्या": "15",
     "सोळावा": "16", "सोळावे": "16", "सोळव्या": "16", "सोळाव्या": "16",
@@ -39,11 +39,10 @@ MARATHI_FLOOR_WORDS = {
     "सत्ताविसावा": "27", "सत्ताविसावे": "27", "सत्ताविसाव्या": "27",
     "अठ्ठाविसावा": "28", "अठ्ठाविसावे": "28", "अठ्ठाविसाव्या": "28",
     "एकणतिसावा": "29", "एकणतिसावे": "29", "एकणतिसाव्या": "29", "एकोणतिसावा": "29",
-    "तिसावा": "30", "तिसावे": "30", "तिसाव्या": "30",
-    "एकतिसावा": "31", "बत्तीसावा": "32", "तेहतीसावा": "33", "चौतीसावा": "34", "पस्तीसावा": "35"
+    "तिसावा": "30", "तिसावे": "30", "तिसाव्या": "30"
 }
 
-CARPET_KEYWORDS = ["कार्पेट", "कारपेट", "चटई", "carpet"]
+CARPET_KEYWORDS = ["कार्पेट", "कारपेट", "चटई", "carpet", "एकूण क्षेत्रफळ", "क्षेत्रफळ"]
 BALCONY_KEYWORDS = ["बाल्कनी", "बालकॉनी", "गॅलरी", "गॅलेरी", "balcony", "gallery", "डेक", "deck"]
 UTILITY_KEYWORDS = ["युटिलिटी", "युटीलिटी", "युटिलीटी", "यूटिलीटी", "यूटिलिटी", "ड्राय", "सर्व्हिस", "utility", "dry"]
 
@@ -56,63 +55,85 @@ def clean_and_normalize_text(text):
         text = text.replace(dev, eng)
     return text
 
-def parse_unit_conversion(value_str, unit_str):
-    try:
-        val = float(value_str)
-        unit_lower = str(unit_str).lower()
-        # Direct conversion selector matching square meter keywords
-        if any(m in unit_lower for m in ['मी', 'मीटर', 'mtr', 'mt', 'sqm', 'sq.m']):
-            return round(val * 10.7639, 2)
-        return round(val, 2)
-    except Exception:
-        return 0.0
-
 def extract_all_areas_globally(text):
-    """
-    Global Segment Tokenizer: Sweeps the text for mathematical metrics,
-    isolates each block, evaluates look-ahead and look-behind contexts,
-    and applies direct scaling rules.
-    """
+    # Strip down formatting punctuation inside numerical expressions immediately
+    text = re.sub(r'(?<=\d),(?=\d)', '', text)
+    
     carpet = 0.0
     balcony = 0.0
     utility = 0.0
     
-    # Standardize string expressions for robust splitting
-    normalized = re.sub(r'\s*\+\s*', ' + ', text)
-    
-    # Regex matching all digits associated with an area label
-    pattern = r'(\d+(?:\.\d+)?)\s*(चौ\.?\s*मी\.?|मीटर|mtrs?|mt|sq\.?\s*m|sqft|ft|फूट|फिट|एरिया|क्षेत्रफळ)'
-    matches = list(re.finditer(pattern, normalized, re.IGNORECASE))
-    
-    for i, match in enumerate(matches):
-        val_str = match.group(1)
-        unit_str = match.group(2)
+    # PATH A: String Equation Handler (e.g., 45.71चौ.मी.+ 0.00 चौ.मी. डेक एरिया)
+    if '+' in text and any(u in text for u in ['चौ', 'मी', 'sq', 'ft', 'एरिया']):
+        segments = text.split('+')
+        for seg in segments:
+            seg_lower = seg.lower()
+            nums = re.findall(r'\d+(?:\.\d+)?', seg)
+            if not nums:
+                continue
+                
+            # Filter out numbers tied to structural metadata inside the segment
+            valid_num = None
+            for n in nums:
+                n_idx = seg.find(n)
+                post_txt = seg[n_idx+len(n):n_idx+len(n)+15].lower()
+                if "पार्क" in post_txt or "मजला" in post_txt or "नंबर" in post_txt:
+                    continue
+                valid_num = float(n)
+                break
+                
+            if valid_num is None:
+                continue
+                
+            is_meter = any(m in seg_lower for m in ['चौ', 'मी', 'मीटर', 'mtr', 'mt', 'sqm', 'sq.m'])
+            sqft_val = round(valid_num * 10.7639, 2) if is_meter else round(valid_num, 2)
+            
+            if any(k in seg_lower for k in UTILITY_KEYWORDS):
+                utility += sqft_val
+            elif any(k in seg_lower for k in BALCONY_KEYWORDS):
+                balcony += sqft_val
+            elif any(k in seg_lower for k in CARPET_KEYWORDS):
+                carpet += sqft_val
+            else:
+                if carpet == 0.0:
+                    carpet = sqft_val
+                else:
+                    carpet += sqft_val
+        return round(carpet, 2), round(balcony, 2), round(utility, 2)
         
-        # Isolate the text between this measurement and the next one
-        start_idx = match.end()
-        end_idx = matches[i+1].start() if i + 1 < len(matches) else len(normalized)
-        look_ahead = normalized[start_idx:min(end_idx, start_idx + 50)].lower()
+    # PATH B: Descriptive Line Ambient Handler (e.g., कार्पेट एरिया ७५० चौ.मी.)
+    matches = list(re.finditer(r'\d+(?:\.\d+)?', text))
+    for m in matches:
+        num_str = m.group()
+        num_val = float(num_str)
+        start, end = m.start(), m.end()
         
-        # Check backward context up to 40 characters
-        look_behind = normalized[max(0, match.start() - 40):match.start()].lower()
+        look_behind = text[max(0, start - 35):start].lower()
+        look_ahead = text[end:min(len(text), end + 35)].lower()
         
-        # Run conversion rule
-        sqft_val = parse_unit_conversion(val_str, unit_str)
+        if "मजला" in look_ahead or "floor" in look_ahead or "मजला" in look_behind:
+            continue
+        if "पार्क" in look_ahead or "व्हिलर" in look_ahead or "व्हीलर" in look_ahead:
+            continue
+        if ("फ्लॅट" in look_behind or "सदनिका" in look_behind or "नं" in look_behind or "क्र" in look_behind) and not any(u in look_behind or u in look_ahead for u in ['चौ', 'मी', 'एरिया', 'क्षेत्रफळ']):
+            continue
+            
+        has_area_context = any(u in look_behind or u in look_ahead for u in ['चौ', 'मी', 'मीटर', 'mtr', 'mt', 'sq', 'ft', 'फूट', 'फिट', 'एरिया', 'क्षेत्रफळ', 'कारपेट', 'कार्पेट', 'बाल्कनी', 'युटिलिटी', 'डेक'])
+        if not has_area_context:
+            continue
+            
+        is_meter = any(m_word in look_behind or m_word in look_ahead for m_word in ['चौ', 'मी', 'मीटर', 'mtr', 'mt', 'sqm', 'sq.m'])
+        sqft_val = round(num_val * 10.7639, 2) if is_meter else round(num_val, 2)
         
-        # Route to correct metric basket based on context mapping
-        if any(k in look_ahead for k in UTILITY_KEYWORDS) or any(k in look_behind for k in UTILITY_KEYWORDS):
+        if any(k in look_behind or k in look_ahead for k in UTILITY_KEYWORDS):
             utility += sqft_val
-        elif any(k in look_ahead for k in BALCONY_KEYWORDS) or any(k in look_behind for k in BALCONY_KEYWORDS):
+        elif any(k in look_behind or k in look_ahead for k in BALCONY_KEYWORDS):
             balcony += sqft_val
-        elif any(k in look_ahead for k in CARPET_KEYWORDS) or any(k in look_behind for k in CARPET_KEYWORDS):
+        elif any(k in look_behind or k in look_ahead for k in CARPET_KEYWORDS):
             carpet += sqft_val
         else:
-            # Fallback Rule: If it is the primary number in an equation block,
-            # or if the keyword is mentioned at the end of the text, assign to Carpet.
-            if i == 0:
-                carpet += sqft_val
-            elif any(k in normalized.lower() for k in CARPET_KEYWORDS) and carpet == 0.0:
-                carpet += sqft_val
+            if carpet == 0.0:
+                carpet = sqft_val
             else:
                 carpet += sqft_val
                 
@@ -136,7 +157,7 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
         project_match = re.search(r'([\w\s\-]+?)\s*(?:प्रोजेक्ट|फेज|प्रकल्प|गार्डन्स|रेसिडेन्सी)', text, re.IGNORECASE)
         if project_match: project_name = project_match.group(1).strip()
 
-    # 2. Tower / Wing Target Extraction
+    # 2. Tower / Wing Extraction
     tower_wing = "Not Mentioned"
     if row_context is not None and tower_col in row_context and pd.notna(row_context[tower_col]):
         tower_wing = str(row_context[tower_col]).strip()
@@ -145,7 +166,7 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
         tower_match = re.search(r'(?:बिल्डिंग|बिल्डींग|टाॅवर|टॉवर|विंग|बिल्डिंग नं|बिल्डींग नं)\s*(?:नं|क्र|क्रमांक|नंबर)?\.?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
         if tower_match: tower_wing = tower_match.group(1).strip()
 
-    # 3. Floor Level Extraction (Sharpened)
+    # 3. Floor Level Extraction (Refined Boundary Controls)
     floor_num = "Not Mentioned"
     normalized_floor_text = text.replace(' ', '')
     
@@ -157,8 +178,7 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
             break
             
     if not floor_found:
-        # Match standalone numbers preceding floor markers like "4 था मजला", "12 मजला"
-        floor_digit_match = re.search(r'(\d+)\s*(?:वे|वे|था|रा|री|ा)?\s*(?:मजला|फ्लोअर|floor)', text, re.IGNORECASE)
+        floor_digit_match = re.search(r'(\d+)\s*(?:वे|वा|था|रा|री|ा)?\s*(?:मजला|फ्लोअर|floor)', text, re.IGNORECASE)
         if floor_digit_match:
             floor_num = floor_digit_match.group(1).strip()
         else:
@@ -168,7 +188,7 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
 
     if floor_num.endswith('.0'): floor_num = floor_num[:-2]
 
-    # 4. Unit / Flat Number Extraction (Sharpened Boundary Controls)
+    # 4. Unit / Flat Number Extraction (Isolates Numbers to prevent trailing junk)
     unit_num = "Not Mentioned"
     if row_context is not None and unit_col in row_context and pd.notna(row_context[unit_col]):
         val = row_context[unit_col]
@@ -178,21 +198,20 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
         else:
             unit_num = str(val).strip()
     else:
-        # Matches numbers following unit tokens and breaks cleanly at trailing spaces or punctuation
         unit_match = re.search(r'(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा|फ्लॅट नं|सदनिका नं|फ्लॅट क्र|सदनिका क्र)\s*(?:नं|क्र|क्रमांक|नंबर)?\.?\s*([A-Za-z0-9\-/_]+)', text, re.IGNORECASE)
         if unit_match:
             raw_unit = unit_match.group(1).strip()
-            unit_num = re.split(r'[\s,]', raw_unit)[0]
+            unit_num = re.split(r'[\s,ं.]', raw_unit)[0]
 
     if unit_num.endswith('.0'): unit_num = unit_num[:-2]
 
-    # 5. Global Tokenizer Area Calculations
+    # 5. Execute Routing Metrics Calculations
     carpet_area, balcony_area, utility_area = extract_all_areas_globally(text)
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
     # 6. Parking Allocation Scanner
     parking_val = 0
-    triggers = ["फोर व्हीラー", "फोर व्हीलर", "फोर व्हिलर", "कार पार्किंग", "कार पार्कींग"]
+    triggers = ["फोर व्हीलर", "फोर व्हिलर", "कार पार्किंग", "कार पार्कींग"]
     found_trigger_idx = -1
     
     for trigger in triggers:
