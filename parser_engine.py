@@ -68,25 +68,29 @@ def locate_column_by_keywords(df, keywords):
 def extract_marathi_property_details(raw_text, row_context=None, project_col=None, tower_col=None, unit_col=None):
     text = clean_and_normalize_text(raw_text)
     
-    # 1. Project Identity Extraction (Direct column grab with text fallback)
+    # 1. Project Identity Extraction
     project_name = "Not Mentioned"
     if row_context is not None and project_col in row_context and pd.notna(row_context[project_col]):
         project_name = str(row_context[project_col]).strip()
+        if project_name.endswith('.0'):
+            project_name = project_name[:-2]
     else:
         project_match = re.search(r'([\w\s\-]+?)\s*(?:प्रोजेक्ट|फेज|प्रकल्प|गार्डन्स|रेसिडेन्सी)', text, re.IGNORECASE)
         if project_match:
             project_name = project_match.group(1).strip()
 
-    # 2. Tower / Wing Target Extraction (Direct column grab with text fallback)
+    # 2. Tower / Wing Target Extraction
     tower_wing = "Not Mentioned"
     if row_context is not None and tower_col in row_context and pd.notna(row_context[tower_col]):
         tower_wing = str(row_context[tower_col]).strip()
+        if tower_wing.endswith('.0'):
+            tower_wing = tower_wing[:-2]
     else:
-        tower_match = re.search(r'(?:बिल्डिंग|बिल्डींग|टाॅवर|टॉवर|विंग|बिल्डिंग नं)\s*(?:नं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
+        tower_match = re.search(r'(?:बिल्डिंग|बिल्डींग|टाॅवर|टॉवर|विंग|बिल्डिंग नं)\s*(?:ं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
         if tower_match:
             tower_wing = tower_match.group(1).strip()
 
-    # 3. Floor Level Extraction (Stays on text parser since it works well)
+    # 3. Floor Level Extraction
     floor_num = "Not Mentioned"
     floor_match = re.search(r'([A-Za-z0-9\u0900-\u097F]+)\s*(?:मजला|फ्लोअर)', text, re.IGNORECASE)
     if floor_match:
@@ -100,15 +104,30 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
             if word in text:
                 floor_num = replacement
                 break
+    
+    if floor_num.endswith('.0'):
+        floor_num = floor_num[:-2]
 
-    # 4. Unit / Flat Number Extraction (Direct column grab with text fallback)
+    # 4. Unit / Flat Number Extraction (With Float Decimal Fixes)
     unit_num = "Not Mentioned"
     if row_context is not None and unit_col in row_context and pd.notna(row_context[unit_col]):
-        unit_num = str(row_context[unit_col]).strip()
+        val = row_context[unit_col]
+        # Handle cases where Pandas evaluates it to a structural float object
+        if isinstance(val, (int, float)):
+            if float(val).is_integer():
+                unit_num = str(int(val))
+            else:
+                unit_num = str(val).strip()
+        else:
+            unit_num = str(val).strip()
     else:
-        unit_match = re.search(r'(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा)\s*(?:नं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
+        unit_match = re.search(r'(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा)\s*(?:ं|क्र|क्रमांक)?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
         if unit_match:
             unit_num = unit_match.group(1).strip()
+
+    # Double catch-all string safety check to wipe out trailing .0 configurations
+    if unit_num.endswith('.0'):
+        unit_num = unit_num[:-2]
 
     # 5. Advanced Component Area Extractions
     carpet_area = extract_area_metric(text, CARPET_KEYWORDS)
