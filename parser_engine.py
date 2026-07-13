@@ -7,130 +7,125 @@ DEVANAGARI_DIGITS = {
     '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
 }
 
-# Exhaustive Hardcoded Alternative Matrices for Area Mapping
-CARPET_ALT_PATTERNS = [
-    r'(?:कार्पेट|कारपेट|चटई|एकूण क्षेत्रफळ|क्षेत्रफळ)\s*(?:एरिया|क्षेत्र)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)',
-    r'(\d+(?:\.\d+)?)\s*(?:चौ\.?\s*मी\.?|मीटर|sq\.?\s*m|sqft|ft|फूट|फिट)?\s*(?:कार्पेट|कारपेट|चटई|क्षेत्रफळ)',
-    r'carpet\s*(?:area)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)',
-    r'(\d+(?:\.\d+)?)\s*(?:sqft|sq\s*ft|sq\.ft\.)\s*(?:carpet)'
-]
-
-BALCONY_ALT_PATTERNS = [
-    r'(?:बाल्कनी|बालकॉनी|गॅलरी|गॅलेरी|डेक|ओपन डेक|टेरेस)\s*(?:एरिया|क्षेत्र)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)',
-    r'(\d+(?:\.\d+)?)\s*(?:चौ\.?\s*मी\.?|मीटर|sq\.?\s*m|sqft|ft|फूट|फिट)?\s*(?:बाल्कनी|बालकॉनी|गॅलरी|गॅलेरी|डेक|टेरेस)',
-    r'(?:balcony|gallery|deck|terrace)\s*(?:area)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)',
-    r'(\d+(?:\.\d+)?)\s*(?:sqft|sq\s*ft)\s*(?:balcony|gallery|deck)'
-]
-
-UTILITY_ALT_PATTERNS = [
-    r'(?:युटिलिटी|युटीलिटी|युटिलीटी|यूटिलीटी|यूटिलिटी|ड्राय|सर्व्हिस|ड्राय बाल्कनी)\s*(?:एरिया|क्षेत्र|गॅलरी)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)',
-    r'(\d+(?:\.\d+)?)\s*(?:चौ\.?\s*मी\.?|मीटर|sq\.?\s*m|sqft|ft|फूट|फिट)?\s*(?:युटिलिटी|युटीलिटी|युटिलीटी|यूटिलीटी|यूटिलिटी|ड्राय|सर्व्हिस)',
-    r'(?:utility|dry\s*balcony|service)\s*(?:area)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)',
-    r'(\d+(?:\.\d+)?)\s*(?:sqft|sq\s*ft)\s*(?:utility|dry)'
-]
-
-# Explicit Unit Identifiers for Square Meter Detection
 METER_KEYWORDS = ['चौ', 'मी', 'मीटर', 'mtr', 'mt', 'sqm', 'sq.m', 'sq m']
+UNIT_PATTERN = r'(चौ\.?\s*मी\.?|चौरस\s*मीटर|मीटर|mtr|mt|sq\.?m|sq\.?\s*m|sqft|sq\.?\s*ft|ft|फूट|फिट|sq\.?\s*feet)'
 
 def clean_and_normalize_text(text):
     if pd.isna(text): 
         return ""
-    # Strip out non-breaking space characters and complex whitespace traps
     text = str(text).replace('\xa0', ' ').replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
-    # Remove thousand-separator formatting commas inside numbers to preserve digits
+    # Remove thousand-separator formatting commas to preserve digits
     text = re.sub(r'(?<=\d),(?=\d)', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
-    # Normalize Devanagari numerals directly to Arabic characters
     for dev, eng in DEVANAGARI_DIGITS.items():
         text = text.replace(dev, eng)
     return text
 
-def parse_value_with_conversion(val_str, context_text):
+def get_sqft(val_str, unit_str, context_str):
+    """Safely converts string values to sqft while avoiding massive IDs/Phone numbers."""
     try:
         val = float(val_str)
-        context_lower = context_text.lower()
-        if any(m in context_lower for m in METER_KEYWORDS):
-            return round(val * 10.7639, 2)
-        return round(val, 2)
+        # HARD CEILING: No residential area is > 20,000. This kills the Registration ID bug.
+        if val > 20000:
+            return 0.0
+            
+        unit_lower = (unit_str or "").lower()
+        context_lower = (context_str or "").lower()
+        
+        is_meter = False
+        if unit_lower and any(m in unit_lower for m in METER_KEYWORDS):
+            is_meter = True
+        elif not unit_lower and any(m in context_lower for m in METER_KEYWORDS):
+            is_meter = True
+            
+        if is_meter:
+            return val * 10.7639
+        return val
     except Exception:
         return 0.0
 
 def extract_all_areas_explicitly(text):
-    carpet = 0.0
-    balcony = 0.0
-    utility = 0.0
+    carpet, balcony, utility = 0.0, 0.0, 0.0
     
-    # SYSTEM PATH A: Chained Equation Evaluator (e.g., 45.71चौ.मी.+ 0.00 चौ.मी. डेक एरिया + 1.21 चौ.मी. यूटिलीटी एरिया)
+    # ---------------------------------------------------------
+    # PATH A: Chained Equation Evaluator (+)
+    # ---------------------------------------------------------
     if '+' in text:
         segments = text.split('+')
         for idx, seg in enumerate(segments):
-            seg_lower = seg.lower()
-            numbers = re.findall(r'\d+(?:\.\d+)?', seg)
-            if not numbers:
-                continue
+            # STRICT REGEX: Must be a number followed EXACTLY by an area unit. 
+            # This completely ignores "Flat 1204" or "Floor 3".
+            match = re.search(r'(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN, seg, re.IGNORECASE)
+            
+            if match:
+                val_str = match.group(1)
+                unit_str = match.group(2)
+                sqft_val = get_sqft(val_str, unit_str, seg)
                 
-            # Isolate the numeric token that belongs strictly to area measurements
-            target_number = None
-            for num in numbers:
-                n_pos = seg.find(num)
-                look_ahead_local = seg[n_pos+len(num):n_pos+len(num)+20].lower()
-                # Filter out numbers tied directly to parking slots or layout structural tags
-                if "पार्क" in look_ahead_local or "व्हिलर" in look_ahead_local or "मजला" in look_ahead_local:
+                if sqft_val == 0.0:
                     continue
-                target_number = num
-                break
-                
-            if target_number is None:
-                continue
-                
-            sqft_calculated = parse_value_with_conversion(target_number, seg)
-            
-            # Explicit routing matching based on literal layout identifiers inside the segment block
-            if any(k in seg_lower for k in ['युटिलिटी', 'युटीलिटी', 'युटिलीटी', 'यूटिलीटी', 'यूटिलिटी', 'ड्राय', 'सर्व्हिस', 'utility']):
-                utility += sqft_calculated
-            elif any(k in seg_lower for k in ['बाल्कनी', 'बालकॉनी', 'गॅलरी', 'गॅलेरी', 'डेक', 'deck', 'balcony', 'terrace', 'टेरेस']):
-                balcony += sqft_calculated
-            elif any(k in seg_lower for k in ['कार्पेट', 'कारपेट', 'चटई', 'carpet', 'क्षेत्रफळ']):
-                carpet += sqft_calculated
-            else:
-                # Literal Fallback Cascade for equation strings missing explicit labels inside segments
-                if idx == 0 or carpet == 0.0:
-                    carpet += sqft_calculated
+                    
+                seg_lower = seg.lower()
+                # Route based on keywords present in the segment
+                if any(k in seg_lower for k in ['युटिलिटी', 'युटीलिटी', 'युटिलीटी', 'यूटिलीटी', 'यूटिलिटी', 'ड्राय', 'सर्व्हिस', 'utility', 'dry', 'service']):
+                    utility += sqft_val
+                elif any(k in seg_lower for k in ['बाल्कनी', 'बालकॉनी', 'गॅलरी', 'गॅलेरी', 'डेक', 'deck', 'balcony', 'terrace', 'टेरेस']):
+                    balcony += sqft_val
+                elif any(k in seg_lower for k in ['कार्पेट', 'कारपेट', 'चटई', 'carpet']):
+                    carpet += sqft_val
                 else:
-                    carpet += sqft_calculated
-        return round(carpet, 2), round(balcony, 2), round(utility, 2)
+                    # Fallback for "+ 5.23 sq m" without a label
+                    if idx == 0 and carpet == 0.0:
+                        carpet += sqft_val
+                    elif idx == 1 and balcony == 0.0:
+                        balcony += sqft_val
+                    elif idx == 2 and utility == 0.0:
+                        utility += sqft_val
+        
+        if carpet > 0 or balcony > 0 or utility > 0:
+            return round(carpet, 2), round(balcony, 2), round(utility, 2)
 
-    # SYSTEM PATH B: Sequential Hardcoded Pattern Fallback Cascade Engine
-    # 1. Evaluate Carpet Area patterns explicitly
-    for pattern in CARPET_ALT_PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            val_str = match.group(1)
-            start_pos = text.find(val_str)
-            context_window = text[max(0, start_pos - 20):min(len(text), start_pos + len(val_str) + 20)]
-            carpet = parse_value_with_conversion(val_str, context_window)
-            break
-            
-    # 2. Evaluate Balcony/Deck Area patterns explicitly
-    for pattern in BALCONY_ALT_PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            val_str = match.group(1)
-            start_pos = text.find(val_str)
-            context_window = text[max(0, start_pos - 20):min(len(text), start_pos + len(val_str) + 20)]
-            balcony = parse_value_with_conversion(val_str, context_window)
-            break
-            
-    # 3. Evaluate Utility/Dry Area patterns explicitly
-    for pattern in UTILITY_ALT_PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            val_str = match.group(1)
-            start_pos = text.find(val_str)
-            context_window = text[max(0, start_pos - 20):min(len(text), start_pos + len(val_str) + 20)]
-            utility = parse_value_with_conversion(val_str, context_window)
-            break
-            
+    # ---------------------------------------------------------
+    # PATH B: Sequential Proximity Patterns 
+    # ---------------------------------------------------------
+    carpet_patterns = [
+        r'(?:कार्पेट|कारपेट|चटई|carpet|एकूण क्षेत्रफळ|क्षेत्रफळ)\s*(?:एरिया|क्षेत्र|area)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN + r'?',
+        r'(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN + r'?\s*(?:कार्पेट|कारपेट|चटई|carpet|एकूण क्षेत्रफळ|क्षेत्रफळ)'
+    ]
+    
+    balcony_patterns = [
+        r'(?:बाल्कनी|बालकॉनी|गॅलरी|गॅलेरी|डेक|ओपन डेक|टेरेस|balcony|gallery|deck|terrace)\s*(?:एरिया|क्षेत्र|area)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN + r'?',
+        r'(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN + r'?\s*(?:बाल्कनी|बालकॉनी|गॅलरी|गॅलेरी|डेक|ओपन डेक|टेरेस|balcony|gallery|deck|terrace)'
+    ]
+    
+    utility_patterns = [
+        r'(?:युटिलिटी|युटीलिटी|युटिलीटी|यूटिलीटी|यूटिलिटी|ड्राय|सर्व्हिस|ड्राय बाल्कनी|utility|dry|service)\s*(?:एरिया|क्षेत्र|area)?\s*(?::|=)?\s*(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN + r'?',
+        r'(\d+(?:\.\d+)?)\s*' + UNIT_PATTERN + r'?\s*(?:युटिलिटी|युटीलिटी|युटिलीटी|यूटिलीटी|यूटिलिटी|ड्राय|सर्व्हिस|ड्राय बाल्कनी|utility|dry|service)'
+    ]
+
+    def extract_first_match(patterns, text_to_search):
+        for pattern in patterns:
+            match = re.search(pattern, text_to_search, re.IGNORECASE)
+            if match:
+                val = match.group(1)
+                unit = match.group(2) if len(match.groups()) > 1 else ""
+                
+                # SAFEGUARD: Prevents capturing isolated "1" or "2" from "1 BHK" 
+                # if there is no specific unit attached.
+                if float(val) < 10 and not unit:
+                    continue 
+                    
+                start_pos = match.start()
+                context = text_to_search[max(0, start_pos - 15): min(len(text_to_search), match.end() + 15)]
+                sqft_val = get_sqft(val, unit, context)
+                if sqft_val > 0:
+                    return sqft_val
+        return 0.0
+
+    carpet = extract_first_match(carpet_patterns, text)
+    balcony = extract_first_match(balcony_patterns, text)
+    utility = extract_first_match(utility_patterns, text)
+
     return round(carpet, 2), round(balcony, 2), round(utility, 2)
 
 def locate_column_by_keywords(df, keywords):
@@ -160,7 +155,7 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
         tower_match = re.search(r'(?:बिल्डिंग|बिल्डींग|टाॅवर|टॉवर|विंग|बिल्डिंग नं|बिल्डींग नं)\s*(?:नं|क्र|क्रमांक|नंबर)?\.?\s*([A-Za-z0-9\-]+)', text, re.IGNORECASE)
         if tower_match: tower_wing = tower_match.group(1).strip()
 
-    # 3. Unit / Flat Number Extraction (Preserved and Refined)
+    # 3. Unit / Flat Number Extraction
     unit_num = "Not Mentioned"
     if row_context is not None and unit_col in row_context and pd.notna(row_context[unit_col]):
         val = row_context[unit_col]
@@ -177,7 +172,7 @@ def extract_marathi_property_details(raw_text, row_context=None, project_col=Non
 
     if unit_num.endswith('.0'): unit_num = unit_num[:-2]
 
-    # 4. Explicit Area Alternative Matrix Calculation Engine
+    # 4. Strictly Bound Area Calculation Engine
     carpet_area, balcony_area, utility_area = extract_all_areas_explicitly(text)
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
