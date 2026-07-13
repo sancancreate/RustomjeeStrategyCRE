@@ -26,7 +26,6 @@ if uploaded_file is not None:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, header=0 if has_header else None)
         else:
-            # Accelerated parsing engine implemented via Calamine dependency optimization
             df = pd.read_excel(uploaded_file, header=0 if has_header else None, engine='calamine')
         
         if not has_header:
