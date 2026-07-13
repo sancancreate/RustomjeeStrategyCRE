@@ -1,15 +1,3 @@
-import sys
-import os
-
-# Dynamically append the current file's directory to the Python path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-# Your existing imports continue below...
-import streamlit as st
-import pandas as pd
-import io
-from parser_engine import locate_description_column, extract_marathi_property_details
-
 import streamlit as st
 import pandas as pd
 import io
