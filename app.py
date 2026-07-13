@@ -5,7 +5,7 @@ from parser_engine import locate_description_column, extract_marathi_property_de
 
 st.set_page_config(page_title="Marathi Property Data Extractor", layout="wide")
 
-st.title("📋 Marathi Property Data Extractor Dashboard")
+st.title("📊 Marathi Property Data Extractor Dashboard")
 st.subheader("Transform unstructured regional language descriptions into clean English metrics instantly.")
 
 st.markdown("""
@@ -16,6 +16,7 @@ uploaded_file = st.file_uploader("Upload your property Excel or CSV file", type=
 
 if uploaded_file is not None:
     try:
+        # Load the file
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
@@ -23,24 +24,28 @@ if uploaded_file is not None:
             
         st.success(f"Successfully loaded file: {uploaded_file.name} ({len(df)} rows found)")
         
-        detected_col = locate_description_column(df)
+        # --- IMPROVED COLUMN DETECTION ---
+        # Convert columns to string explicitly to avoid encoding mismatch issues
         all_columns = [str(c) for c in df.columns]
+        detected_col = locate_description_column(df)
         
-        if detected_col in all_columns:
+        # Safety Check: If auto-detection fails or returns a mismatch, default to column 0
+        if detected_col is not None and detected_col in all_columns:
             default_idx = all_columns.index(detected_col)
         else:
+            st.warning("Could not automatically detect the description column. Please select it manually from the dropdown below.")
             default_idx = 0
             
         st.markdown("### 🔍 Column Target Settings")
         selected_column = st.selectbox(
-            "We automatically scanned and selected a default column. If it looks incorrect, use the dropdown below to manually choose the property description field:",
+            "Select the property description field:",
             options=all_columns,
             index=default_idx
         )
         
         st.info(f"Active Extraction Target: **'{selected_column}'**")
         
-        if st.button("⚡ Process and Segregate Data", type="primary"):
+        if st.button("🚀 Process and Segregate Data", type="primary"):
             processed_rows = []
             
             progress_bar = st.progress(0)
@@ -52,6 +57,7 @@ if uploaded_file is not None:
                 extracted_metrics = extract_marathi_property_details(raw_text, row_context=row)
                 processed_rows.append(extracted_metrics)
                 
+                # Update progress
                 if idx % max(1, total_rows // 20) == 0 or idx == total_rows - 1:
                     progress_percent = int(((idx + 1) / total_rows) * 100)
                     progress_bar.progress(progress_percent)
@@ -66,7 +72,7 @@ if uploaded_file is not None:
             output_df = st.session_state['processed_data']
             
             st.markdown("---")
-            st.subheader("👀 Extracted Data Preview (Clean English Metrics)")
+            st.subheader("📋 Extracted Data Preview")
             
             # Master target list of columns to display
             target_columns = [
@@ -75,17 +81,16 @@ if uploaded_file is not None:
                 'Total Area (sq ft)', 'Parking Space'
             ]
             
-            # Dynamic safety check: Only slice columns that exist in the active dataframe
             columns_to_show = [col for col in target_columns if col in output_df.columns]
             st.dataframe(output_df[columns_to_show].head(10))
             
+            # Prepare file for download
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 output_df.to_excel(writer, index=False, sheet_name='Summary English Report')
             buffer.seek(0)
             
-            st.markdown("### 📥 Download Isolated Results")
-            st.markdown("This download contains strictly the parameters extracted and parsed from your source document description field.")
+            st.markdown("### 💾 Download Isolated Results")
             st.download_button(
                 label="Download Isolated Clean Excel File",
                 data=buffer,
