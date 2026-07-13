@@ -37,13 +37,11 @@ if uploaded_file is not None:
         # --- ROBUST COLUMN DETECTION LOGIC ---
         all_columns = [str(c) for c in df.columns]
         
-        # Auto-match column guesses based on common real-estate naming schemas
         desc_col_guess = locate_column_by_keywords(df, ['property description', 'description', 'वर्णन', 'मालमत्ता'])
         proj_col_guess = locate_column_by_keywords(df, ['project', 'प्रकल्प', 'नाव', 'building name'])
         tower_col_guess = locate_column_by_keywords(df, ['tower', 'wing', 'बिल्डिंग', 'विंग', 'इमारत'])
         unit_col_guess = locate_column_by_keywords(df, ['unit', 'flat', 'सदनिका', 'फ्लॅट', 'शॉप', 'नं'])
 
-        # Helper to safely locate index numbers for selectboxes without causing errors
         def get_column_index(detected_col, columns_list, fallback=0):
             if detected_col and str(detected_col) in columns_list:
                 return columns_list.index(str(detected_col))
@@ -87,7 +85,6 @@ if uploaded_file is not None:
             for idx, row in df.iterrows():
                 raw_text = str(row[selected_desc_column])
                 
-                # Execute engine processing with specific mapped sheet columns passed in
                 extracted_metrics = extract_marathi_property_details(
                     raw_text=raw_text, 
                     row_context=row,
