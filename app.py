@@ -1,7 +1,3 @@
-import streamlit as st
-import pandas as pd
-import io
-from parser_engine import locate_description_column, extract_marathi_property_details
 import sys
 import os
 
@@ -9,6 +5,11 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Your existing imports continue below...
+import streamlit as st
+import pandas as pd
+import io
+from parser_engine import locate_description_column, extract_marathi_property_details
+
 import streamlit as st
 import pandas as pd
 import io
