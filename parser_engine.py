@@ -1,45 +1,50 @@
 import re
 import pandas as pd
 
-# Layer 1: Brand, Component, and Alphanumeric Phonetic Mapping Matrix
-OFFICIAL_BRAND_MAP = {
-    "दि": "The",
-    "बाय": "By",
-    "अेड्रेस": "Address",
-    "जीएस": "GS",
-    "टाॅवर": "Tower",
-    "टॉवर": "Tower",
-    "बिल्डिंग": "Building",
-    "इमारत": "Building",
-    "गृहसंकुल": "Complex",
-    "प्रोजेक्ट": "Project",
-    "प्रकल्प": "Project",
-    "अनंतम": "Anantam",
-    "रिजन्सी": "Regency",
-    "एनएक्सटी": "Nxt",
-    "फेज": "Phase",
-    "मजला": "Floor",
-    "सदनिका": "Flat",
-    "युटीलिटी": "Utility",
-    "युटिलिटी": "Utility",
-    "एसएसडब्ल्यु": "SSW",
-    "टी": "T",
-    "ए": "A",
-    "बी": "B",
-    "सी": "C",
-    "डी": "D"
+# Global Mappings for Standardization
+DEVANAGARI_DIGITS = {
+    '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
+    '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
 }
+
+MARATHI_FLOOR_WORDS = {
+    "तळ": "0", "ग्राउंड": "0", "पहिला": "1", "दुसरा": "2", 
+    "तिसरा": "3", "चौथा": "4", "पाचवा": "5", "सहावा": "6", 
+    "सातवा": "7", "आठवा": "8", "नवा": "9", "दहावा": "10"
+}
+
+OFFICIAL_BRAND_MAP = {
+    "दि": "The", "बाय": "By", "अेड्रेस": "Address", "जीएस": "GS",
+    "टाॅवर": "Tower", "टॉवर": "Tower", "बिल्डिंग": "Building",
+    "इमारत": "Building", "गृहसंकुल": "Complex", "प्रोजेक्ट": "Project",
+    "प्रकल्प": "Project", "अनंतम": "Anantam", "रिजन्सी": "Regency",
+    "एनएक्सटी": "Nxt", "फेज": "Phase", "मजला": "Floor",
+    "सदनिका": "Flat", "युटीलिटी": "Utility", "युटिलिटी": "Utility",
+    "एसएसडब्ल्यु": "SSW", "टी": "T", "ए": "A", "बी": "B", 
+    "सी": "C", "डी": "D"
+}
+
+def clean_and_normalize_text(text):
+    """
+    Standardizes raw text by normalizing Devanagari digits to English numbers
+    and cleaning up erratic white space variations.
+    """
+    if pd.isna(text):
+        return ""
+    text = str(text).strip()
+    for dev, eng in DEVANAGARI_DIGITS.items():
+        text = text.replace(dev, eng)
+    return text
 
 def safe_float(val):
     """
-    Safely converts a string to a float. Isolates clean numeric groups 
-    to handle typos like duplicate decimal points (e.g., '.44.59').
+    Isolates clean numeric sequences to gracefully handle typical typos
+    like double decimals or trailing characters.
     """
-    if pd.isna(val) or not val:
+    if not val:
         return 0.0
     try:
         cleaned = str(val).strip().strip('.')
-        # Isolate the first clean float representation sequence found
         match = re.search(r'\d+(?:\.\d+)?', cleaned)
         if match:
             return float(match.group(0))
@@ -49,14 +54,13 @@ def safe_float(val):
 
 def universal_marathi_to_english(text):
     """
-    Converts Marathi Devanagari text strings into clean English titles phonetically,
-    applying key corporate overrides.
+    Converts Marathi text strings into clean English titles phonetically,
+    applying key corporate structural overrides and handling terminal consonants cleanly.
     """
     if not text or pd.isna(text):
         return "Not Mentioned"
     
     text = str(text).strip()
-    
     for regional_word, english_word in OFFICIAL_BRAND_MAP.items():
         text = text.replace(regional_word, english_word)
         
@@ -107,7 +111,11 @@ def universal_marathi_to_english(text):
                     translated_chars.append(base_phonetic + MATRAS[next_char])
                     idx += 2
                 else:
-                    translated_chars.append(base_phonetic + 'a')
+                    # Basic schwa deletion check for cleaner word endings
+                    if idx + 2 == length or text[idx + 1] == ' ':
+                        translated_chars.append(base_phonetic)
+                    else:
+                        translated_chars.append(base_phonetic + 'a')
                     idx += 1
             else:
                 translated_chars.append(base_phonetic)
@@ -122,9 +130,6 @@ def universal_marathi_to_english(text):
     return final_output.title()
 
 def locate_description_column(df):
-    """
-    Scans data headers to auto-match the description source column location.
-    """
     possible_targets = [
         'property description', 'property_description', 'description', 
         'property details', 'property_details', 'वर्णन', 'मालमत्ता वर्णन'
@@ -135,17 +140,17 @@ def locate_description_column(df):
             return col
     return None
 
-def extract_marathi_property_details(text, row_context=None):
+def extract_marathi_property_details(raw_text, row_context=None):
     """
-    Robust property detail extraction engine protected against data-entry formatting errors.
+    Robust property detail extraction engine protected against Devanagari numeral representations,
+    text-based structural floor definitions, and volatile punctuation variations.
     """
-    if pd.isna(text):
-        text = ""
-    text = str(text).strip()
+    # Pre-parse normalization phase
+    text = clean_and_normalize_text(raw_text)
     
-    # 1. Project Name Extraction
+    # 1. Project Name Extraction (Fixing the Devanagari Character bug)
     project_name = "Not Mentioned"
-    project_match = re.search(r'(?:वरील|yeथील|मधील|येणाऱ्या)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|या मिळकतीवर)', text)
+    project_match = re.search(r'(?:वरील|येथील|मधील|येणाऱ्या|स्थित)\s+(.*?)\s+(?:या\s+)?(?:प्रोजेक्ट|प्रकल्प|गृहसंकुल|इमारत|या मिळकतीवर)', text)
     if project_match:
         project_name = universal_marathi_to_english(project_match.group(1).strip())
     
@@ -155,26 +160,15 @@ def extract_marathi_property_details(text, row_context=None):
                 project_name = str(row_context[fallback_col]).strip()
                 break
 
-    # 2. Tower / Wing Extraction 
+    # 2. Tower / Wing Extraction (Removing rigid comma punctuation restrictions)
     tower = "Not Mentioned"
-    tower_match = re.search(r'(?:बिल्डिंग\s+नं\.|इमारत\s+क्र\.|टॉवर\s*-\s*)\s*([0-9\w\-]+),(.*?)\s+(?:बिल्डिंग|इमारत|टॉवर)', text)
-    if not tower_match:
-        tower_match = re.search(r'(?:टॉवर\s*-\s*)\s*([0-9\w\-]+)', text)
-    if not tower_match:
-        tower_match = re.search(r'(?:टॉवर|बिल्डिंग|विंग)\s*(?:नं|क्र)[\s.:-]*([A-Za-z0-9\u0900-\u097F]+)', text)
-        
+    tower_match = re.search(r'(?:बिल्डिंग|इमारत|टॉवर|विंग)\s*(?:नं|क्र|नंबर)?[\s.:-]*([A-Za-z0-9\u0900-\u097F\-]+)', text)
     if tower_match:
-        groups = tower_match.groups()
-        b_num = groups[0].strip() if len(groups) > 0 else ""
-        raw_b_name = groups[1].strip() if (len(groups) > 1 and groups[1]) else ""
-        if raw_b_name:
-            tower = f"Tower/Building {universal_marathi_to_english(b_num)} ({universal_marathi_to_english(raw_b_name)})"
-        else:
-            tower = f"Tower {universal_marathi_to_english(b_num)}"
+        tower = f"Tower {universal_marathi_to_english(tower_match.group(1).strip())}"
     else:
-        alt_tower = re.search(r'([A-Za-z0-9\u0900-\u097F\s\-]+)\s*(?:विंग|टॉवर|टॉवर नं|इमारतीचे नाव)', text)
+        alt_tower = re.search(r'([A-Za-z0-9\u0900-\u097F\-]+)\s*(?:विंग|टॉवर|इमारतीचे नाव)', text)
         if alt_tower:
-            tower = universal_marathi_to_english(alt_tower.group(0).strip())
+            tower = universal_marathi_to_english(alt_tower.group(1).strip())
             
     if tower == "Not Mentioned" and row_context is not None:
         for fallback_col in ['Building', 'Tower/Wing', 'Tower', 'Wing']:
@@ -182,14 +176,20 @@ def extract_marathi_property_details(text, row_context=None):
                 tower = str(row_context[fallback_col]).strip()
                 break
 
-    # 3. Floor Number Extraction
+    # 3. Floor Number Extraction (Adding support for written out text variations)
     floor_no = "Not Mentioned"
-    floor_match = re.search(r'(\d+)\s*[\u0900-\u097Fa-zA-Z]*\s*(?:मजला|मजल्यावरील|माळा)', text)
-    if not floor_match:
-        floor_match = re.search(r'(?:माळा नं|मजला नं)[\s.:-]*(\d+)', text)
-        
-    if floor_match:
-        floor_no = floor_match.group(1).strip()
+    # First look for text-based floor patterns
+    for word, num in MARATHI_FLOOR_WORDS.items():
+        if word in text:
+            floor_no = num
+            break
+            
+    if floor_no == "Not Mentioned":
+        floor_match = re.search(r'(\d+)\s*(?:वे|वा|वेळ|मजला|मजल्यावरील|माळा)', text)
+        if not floor_match:
+            floor_match = re.search(r'(?:माळा नं|मजला नं|मजला)[\s.:-]*(\d+)', text)
+        if floor_match:
+            floor_no = floor_match.group(1).strip()
         
     if floor_no == "Not Mentioned" and row_context is not None:
         for fallback_col in ['Floor no', 'Floor No', 'Floor', 'Floor Number']:
@@ -199,12 +199,12 @@ def extract_marathi_property_details(text, row_context=None):
 
     # 4. Unit / Flat Number Extraction
     unit_no = "Not Mentioned"
-    unit_match = re.search(r'(?:सदनिका|फ्लॅट|युनिट|निवासी\s+सदनिका)\s*(?:क्र|नं|नंबर|नो|no|num)?[\s.:-]*([A-Za-z0-9\u0900-\u097F\-\/]+)', text)
+    unit_match = re.search(r'(?:सदनिका|फ्लॅट|युनिट|दुकान|कार्यालय|निवासी\s+सदनिका)\s*(?:क्र|नं|नंबर|नो|no|num)?[\s.:-]*([A-Za-z0-9\-\/]+)', text)
     if not unit_match:
-        unit_match = re.search(r'(?:क्र|नं|नंबर|नो)[\s.:-]*([A-Za-z0-9\u0900-\u097F\-\/]+)', text)
+        unit_match = re.search(r'(?:क्र|नं|नंबर|नो)[\s.:-]*([A-Za-z0-9\-\/]+)', text)
         
     if unit_match:
-        unit_no = universal_marathi_to_english(unit_match.group(1).strip())
+        unit_no = unit_match.group(1).strip()
         
     if unit_no == "Not Mentioned" and row_context is not None:
         for fallback_col in ['Unit no', 'Unit No', 'Unit', 'Unit Number', 'Flat No', 'Flat no']:
@@ -212,22 +212,22 @@ def extract_marathi_property_details(text, row_context=None):
                 unit_no = str(row_context[fallback_col]).strip()
                 break
 
-    # 5. Component Space Metrics Extraction
+    # 5. Component Space Metrics Extraction (Corrected typos and broadened variants)
     carpet_area = 0.0
     balcony_area = 0.0
     utility_area = 0.0
     
     # Carpet Extraction
-    carpet_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)\s*(?:रेरा\s+)?(?:का्?रपेट|कारपेट)', text)
+    carpet_ft_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.|चौ.फूट|स्क्वेअर फूट)\s*(?:रेरा\s+)?(?:कारपेट|कार्पेट)', text)
     if not carpet_ft_match:
-        carpet_ft_match = re.search(r'(?:क्षेत्रफळ|चटईक्षेत्र)\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
+        carpet_ft_match = re.search(r'(?:क्षेत्रफळ|चटईक्षेत्र|कारपेट क्षेत्रफळ)\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
     if not carpet_ft_match:
         carpet_ft_match = re.search(r'म्हणजेच\s*([0-9.]+)\s*(?:चौ\.\s*फु\.|चौ\.फु\.)', text)
         
     if carpet_ft_match:
         carpet_area = safe_float(carpet_ft_match.group(1))
     else:
-        carpet_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:रेरा\s+)?(?:का्?रपेट|कारपेट)', text)
+        carpet_m_match = re.search(r'([0-9.]+)\s*(?:चौ\.\s*मी\.|चौ\.मी\.)\s*(?:रेरा\s+)?(?:कारपेट|कार्पेट)', text)
         if carpet_m_match:
             carpet_area = round(safe_float(carpet_m_match.group(1)) * 10.76, 2)
             
@@ -268,14 +268,15 @@ def extract_marathi_property_details(text, row_context=None):
 
     total_area = round(carpet_area + balcony_area + utility_area, 2)
 
-    # 6. Parking Allocation Scanner
+    # 6. Parking Allocation Scanner (Enhanced evaluation rules)
     parking_desc = "0"
-    if "दोन कार पार्किंग" in text or "two car parking" in text.lower():
+    lower_text = text.lower()
+    if "दोन कार पार्किंग" in text or "two car parking" in lower_text or "फोर व्हीलर पार्किंग २" in text:
         parking_desc = "2"
-    elif "एक कार पार्किंग" in text or "कार पार्किंग" in text or "पार्किंग" in text:
+    elif "एक कार पार्किंग" in text or "कार पार्किंग" in text or "पार्किंग" in text or "four wheeler parking" in lower_text:
         parking_desc = "1"
         
-    p_num_match = re.search(r'\+\s*(\d+)\s+(?:पोडीयम|पार्किंग|वाहनाचा)', text)
+    p_num_match = re.search(r'\+\s*(\d+)\s+(?:पोडीयम|पार्किंग|वाहनाचा|फोर व्हीलर)', text)
     if p_num_match:
         parking_desc = str(p_num_match.group(1))
 
