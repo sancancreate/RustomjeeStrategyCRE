@@ -1,6 +1,11 @@
+import sys
+import os
 import streamlit as st
 import pandas as pd
 import io
+
+# Ensure the app can find parser_engine in the same directory
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from parser_engine import locate_description_column, extract_marathi_property_details
 
 st.set_page_config(page_title="Marathi Property Data Extractor", layout="wide")
@@ -9,32 +14,38 @@ st.title("📊 Marathi Property Data Extractor Dashboard")
 st.subheader("Transform unstructured regional language descriptions into clean English metrics instantly.")
 
 st.markdown("""
-This tool automatically parses uploaded property spreadsheets. It targets Marathi legal descriptions, isolates vital metrics like project identity, wings, floor levels, unit numbers, component areas, and parking allocations, and builds an aggregate summary spreadsheet ready for instant download.
+This tool automatically parses uploaded property spreadsheets. It targets Marathi legal descriptions, isolates vital metrics, and builds an aggregate summary spreadsheet.
 """)
 
 uploaded_file = st.file_uploader("Upload your property Excel or CSV file", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
     try:
-        # Load the file
+        # --- HEADER CONTROL ---
+        # If your file has no headers or weird text at the top, uncheck this box
+        has_header = st.checkbox("File has valid column headers (row 1)", value=True)
+        
         if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
+            df = pd.read_csv(uploaded_file, header=0 if has_header else None)
         else:
-            df = pd.read_excel(uploaded_file)
+            df = pd.read_excel(uploaded_file, header=0 if has_header else None)
+        
+        # If no header, force numeric column names to prevent errors
+        if not has_header:
+            df.columns = [f"Column_{i}" for i in range(len(df.columns))]
             
         st.success(f"Successfully loaded file: {uploaded_file.name} ({len(df)} rows found)")
         
-        # --- IMPROVED COLUMN DETECTION ---
-        # Convert columns to string explicitly to avoid encoding mismatch issues
+        # --- ROBUST COLUMN DETECTION ---
         all_columns = [str(c) for c in df.columns]
         detected_col = locate_description_column(df)
         
-        # Safety Check: If auto-detection fails or returns a mismatch, default to column 0
-        if detected_col is not None and detected_col in all_columns:
+        # Safely find the index without crashing
+        default_idx = 0
+        if detected_col and detected_col in all_columns:
             default_idx = all_columns.index(detected_col)
         else:
-            st.warning("Could not automatically detect the description column. Please select it manually from the dropdown below.")
-            default_idx = 0
+            st.warning("Could not auto-detect the description column. Please select it manually below.")
             
         st.markdown("### 🔍 Column Target Settings")
         selected_column = st.selectbox(
@@ -47,7 +58,6 @@ if uploaded_file is not None:
         
         if st.button("🚀 Process and Segregate Data", type="primary"):
             processed_rows = []
-            
             progress_bar = st.progress(0)
             status_text = st.empty()
             total_rows = len(df)
@@ -57,7 +67,6 @@ if uploaded_file is not None:
                 extracted_metrics = extract_marathi_property_details(raw_text, row_context=row)
                 processed_rows.append(extracted_metrics)
                 
-                # Update progress
                 if idx % max(1, total_rows // 20) == 0 or idx == total_rows - 1:
                     progress_percent = int(((idx + 1) / total_rows) * 100)
                     progress_bar.progress(progress_percent)
@@ -70,11 +79,9 @@ if uploaded_file is not None:
         
         if 'processed_data' in st.session_state:
             output_df = st.session_state['processed_data']
-            
             st.markdown("---")
             st.subheader("📋 Extracted Data Preview")
             
-            # Master target list of columns to display
             target_columns = [
                 'Project Name', 'Tower Number', 'Floor Number', 'Unit Number', 
                 'Carpet Area (sq ft)', 'Balcony Area (sq ft)', 'Utility Area (sq ft)', 
@@ -84,7 +91,6 @@ if uploaded_file is not None:
             columns_to_show = [col for col in target_columns if col in output_df.columns]
             st.dataframe(output_df[columns_to_show].head(10))
             
-            # Prepare file for download
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 output_df.to_excel(writer, index=False, sheet_name='Summary English Report')
