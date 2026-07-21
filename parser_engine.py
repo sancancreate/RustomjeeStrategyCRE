@@ -68,11 +68,11 @@ MARATHI_NUMBER_WORDS: Dict[str, int] = {
 }
 
 # Unit fragments (kept separate so we can tell metres from feet apart)
-METER_UNIT = r"(?:चौ\s*\.?\s*मी(?:टर)?\s*\.?|चौरस\s*मीटर|sq\s*\.?\s*m(?:tr|eter)?s?\s*\.?|sqm|square\s*meters?)"
-FEET_UNIT = r"(?:चौ\s*\.?\s*फु(?:ट)?\s*\.?|चौ\s*\.?\s*फूट|sq\s*\.?\s*ft\s*\.?|sqft|sq\s*\.?\s*feet|square\s*feet)"
+METER_UNIT = r"(?:चौ\s*\.?\s*म[ीि](?:टर|तर)?\s*\.?|चौरस\s*मीटर|sq\s*\.?\s*m(?:tr|eter)?s?\s*\.?|sqm|square\s*meters?)"
+FEET_UNIT = r"(?:चौ\s*\.?\s*फु(?:ट)?\s*\.?|चौ\s*\.?\s*फूट|चौ\s*\.?\s*फिट|चौ\s*\.?\s*फी\.?|चौ\s*\.?\s*फू\.?|चौरस\s*फूट|sq\s*\.?\s*ft\s*\.?|sqft|sq\s*\.?\s*feet|square\s*feet)"
 ANY_UNIT = rf"(?:{METER_UNIT}|{FEET_UNIT})"
 
-NUM = r"\d+(?:\.\d+)?"
+NUM = r"\d+\s*(?:\.\s*\d+)?"
 # 'area' word — covers both क्षेत्र and its common inflection क्षेत्रफळ
 AREA_WORD = r"क्षेत्र(?:फळ)?"
 
@@ -226,7 +226,7 @@ def _to_sqm(value: float, unit_hint: str) -> float:
 
 def _safe_float(s: str) -> Optional[float]:
     try:
-        return float(s)
+        return float(re.sub(r"\s+", "", s))
     except (TypeError, ValueError):
         return None
 
@@ -467,6 +467,108 @@ class ChainedPlusEquationStrategy(AreaStrategy):
         }
 
 
+class NarrativeConversionCarpetStrategy(AreaStrategy):
+    """
+    Pattern K: a narrative sentence where the carpet figure is given in one
+    unit, restated in the other via 'म्हणजेच' (i.e./meaning), with the
+    carpet label appearing only after both numbers, e.g.:
+    '63.96 चौ.मी. म्हणजेच 688 चौ.फु. रेरा कारपेट क्षेत्रफळाच्या सदनिके
+     सोबत 3.25 चौ.मी. क्षेत्रफळाची बाल्कनी तसेच 1.77 चौ.मी. ...युटीलिटी'
+    Only the first (leading) figure is needed — _to_sqm converts whichever
+    unit it's in, and since both figures denote the same area, picking
+    either is correct.
+    """
+
+    name = "NARRATIVE_CONVERSION_CARPET"
+
+    _RE = re.compile(
+        rf"({NUM})\s*({ANY_UNIT})\.?\s*म्हणजेच\s*{NUM}\s*{ANY_UNIT}\.?\s*(?:रेरा\s*)?{KW_CARPET}",
+        re.IGNORECASE,
+    )
+
+    def try_extract(self, text: str) -> Optional[Dict[str, float]]:
+        m = self._RE.search(text)
+        if not m:
+            return None
+        val = _safe_float(m.group(1))
+        if val is None:
+            return None
+        carpet_sqm = _to_sqm(val, m.group(2))
+
+        # Balcony / utility are often given separately later in the same
+        # sentence ('सोबत X चौ.मी. क्षेत्रफळाची बाल्कनी', 'तसेच Y चौ.मी.
+        # क्षेत्रफळाचे युटीलिटी एरिया'); reuse the flexible label finder.
+        b = _find_labeled_area(text, KW_BALCONY)
+        u = _find_labeled_area(text, KW_UTILITY)
+        balcony_sqm = _to_sqm(b[0], b[1]) if b else 0.0
+        utility_sqm = _to_sqm(u[0], u[1]) if u else 0.0
+
+        return {
+            "carpet_sqm": carpet_sqm,
+            "attached_sqm": 0.0,
+            "balcony_sqm": balcony_sqm,
+            "utility_sqm": utility_sqm,
+            "total_sqm": round(carpet_sqm + balcony_sqm + utility_sqm, 4),
+        }
+
+
+class UnqualifiedAreaStrategy(AreaStrategy):
+    """
+    Pattern L: the unit's area is stated but with NO carpet/RERA/total
+    qualifier at all — just 'क्षेत्रफळ 97.80 चौ. मी.' or '463 चौ फिट'
+    on its own, sometimes followed by 'बिल्टअप' (built-up).
+
+    This is deliberately tried LAST among the text-based strategies
+    (lowest precision) and explicitly skips any 'क्षेत्रफळ'/'क्षेत्र'
+    mention that is actually describing a PARKING SPACE's area rather
+    than the unit's, e.g. 'पार्किंग(क्षेत्र 11.15 चौ. मी.)' or
+    'इनक्लोज पार्किंग क्षेत्रफळ 13.94 चौ. मी.' — those must never be
+    mistaken for the flat's carpet area.
+    """
+
+    name = "UNQUALIFIED_AREA"
+
+    _LABELED_RE = re.compile(
+        rf"(?:सदनिकेचे\s*)?(?:{AREA_WORD}|एरिया)\s*[-:]?\s*({NUM})\s*({ANY_UNIT})\s*(?:बिल्ट\s*अप|बिल्टअप)?",
+        re.IGNORECASE,
+    )
+    _BARE_UNIT_RE = re.compile(rf"({NUM})\s*({ANY_UNIT})\s*(?:कारपेट|कार्पेट)?", re.IGNORECASE)
+    _PARKING_CONTEXT_RE = re.compile(r"पार्क", re.IGNORECASE)
+
+    def try_extract(self, text: str) -> Optional[Dict[str, float]]:
+        for pat in (self._LABELED_RE, self._BARE_UNIT_RE):
+            for m in pat.finditer(text):
+                val = _safe_float(m.group(1))
+                if val is None:
+                    continue
+                # Look back a short window to make sure this isn't a
+                # parking space's area, e.g. '...पार्किंग(क्षेत्र 11.15...)'
+                window_start = max(0, m.start() - 30)
+                preceding = text[window_start:m.start()]
+                # Only treat as parking-space area if the parking mention is
+                # NOT separated from this area figure by a comma / field
+                # boundary — e.g. block 'पार्किंग(क्षेत्र 11.15...)' and
+                # 'पार्किंग क्षेत्रफळ 13.94...', but do NOT block
+                # 'पार्किंग 2,एरिया-1116...' where पार्किंग belongs to an
+                # unrelated preceding field.
+                park_match = self._PARKING_CONTEXT_RE.search(preceding)
+                if park_match:
+                    between = preceding[park_match.end():]
+                    if "," not in between:
+                        continue
+                total_sqm = _to_sqm(val, m.group(2))
+                if not (MIN_REALISTIC_SQM <= total_sqm <= MAX_REALISTIC_SQM):
+                    continue
+                return {
+                    "carpet_sqm": total_sqm,
+                    "attached_sqm": 0.0,
+                    "balcony_sqm": 0.0,
+                    "utility_sqm": 0.0,
+                    "total_sqm": total_sqm,
+                }
+        return None
+
+
 class PatternDetector:
     """
     Chooses the best-matching extraction strategy for a normalised,
@@ -479,10 +581,12 @@ class PatternDetector:
     # the earlier it should be tried.
     STRATEGIES: List[AreaStrategy] = [
         LabeledCarpetAttachedStrategy(),
+        NarrativeConversionCarpetStrategy(),
         EnglishDualUnitCarpetAncillaryStrategy(),
         BalconyUtilityBreakdownStrategy(),
         ChainedPlusEquationStrategy(),
         ExplicitTotalOnlyStrategy(),
+        UnqualifiedAreaStrategy(),
     ]
 
     @classmethod
@@ -565,6 +669,8 @@ class ConfidenceScorer:
             score += 15.0
         if pattern in ("LABELED_CARPET_ATTACHED", "CARPET_ANCILLARY_DUAL_UNIT"):
             score += 10.0  # these patterns give an explicit, unambiguous total
+        if pattern == "UNQUALIFIED_AREA":
+            score -= 10.0  # area stated, but without an explicit carpet/total label
         if project_found:
             score += 12.0
         if unit_found:
@@ -595,14 +701,14 @@ class FieldExtractor:
     )
 
     _UNIT_SEGMENT_RE = re.compile(
-        r"(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा)\s*(?:नं|क्र|क्रमांक)\.?\s*[:.]?\s*(.{0,40}?)(?:,|माळा|$)",
+        r"(?:सदनिका|फ्लॅट|शॉप|दुकान|गाळा)\s*(?:नं|क्र|क्रमांक)?\.?\s*[:.\-]?\s*(.{0,40}?)(?:,|माळा|$)",
         re.IGNORECASE,
     )
     _DIGIT_TOKEN_RE = re.compile(r"([0-9]{2,6}[A-Za-z]?)")
 
     _PARKING_NUM_WORD = "|".join(MARATHI_NUMBER_WORDS.keys())
     _PARKING_RE = re.compile(
-        rf"({_PARKING_NUM_WORD}|[0-9]+)?\s*(?:सिंगल\s*)?(?:कव्हर्ड\s*)?कार\s*पार्क(?:िंग|ींग)",
+        rf"({_PARKING_NUM_WORD}|[0-9]+)?\s*(?:सिंगल\s*)?(?:कव्हर्ड\s*)?कार\s*पार्क\S{{0,4}}ग",
         re.IGNORECASE,
     )
 
@@ -658,7 +764,7 @@ class FieldExtractor:
             if token.isdigit():
                 return int(token)
             return MARATHI_NUMBER_WORDS.get(token, 1)
-        if "पार्किंग" in text or "पार्कींग" in text:
+        if "पार्किंग" in text or "पार्कींग" in text or "पार्किग" in text:
             return 1
         return 0
 
@@ -716,16 +822,40 @@ def parse_property_description(
     project_col: Optional[str] = None,
     tower_col: Optional[str] = None,
     unit_col: Optional[str] = None,
+    fallback_area_sqft: Optional[float] = None,
 ) -> ParseResult:
     """
     Runs the full pipeline for a single description and returns a
     ParseResult. This is the main entry point used by app.py.
+
+    fallback_area_sqft: if provided (e.g. from a structured 'Area' column
+    that already exists in the source spreadsheet) and the free-text
+    description does not itself state an area, this value is used as the
+    total/carpet area instead of leaving the row unparsed. This commonly
+    happens in IGR extracts where only *some* rows spell the area out in
+    the Marathi description while a separate numeric column always has it.
     """
     normalized = TextNormalizer.normalize(raw_text)
     cleaned = NoiseCleaner.clean(normalized)
 
     areas, pattern = PatternDetector.extract(cleaned)
+
+    used_fallback = False
+    if areas.get("total_sqm", 0.0) <= 0 and fallback_area_sqft and fallback_area_sqft > 0:
+        fallback_sqm = fallback_area_sqft / SQM_TO_SQFT
+        areas = {
+            "carpet_sqm": fallback_sqm,
+            "attached_sqm": 0.0,
+            "balcony_sqm": 0.0,
+            "utility_sqm": 0.0,
+            "total_sqm": fallback_sqm,
+        }
+        pattern = "AREA_COLUMN_FALLBACK"
+        used_fallback = True
+
     warnings = Validator.validate(areas)
+    if used_fallback:
+        warnings.append("Area taken from spreadsheet Area column; not stated in description text")
 
     project_name = FieldExtractor.project_name(cleaned, row_context, project_col)
     tower_wing = FieldExtractor.tower_wing(cleaned, row_context, tower_col)
@@ -739,6 +869,8 @@ def parse_property_description(
         project_found=project_name != "Not Mentioned",
         unit_found=unit_number != "Not Mentioned",
     )
+    if used_fallback:
+        confidence = min(confidence, 60.0)  # cap confidence: figure wasn't verified against the text
 
     if areas.get("total_sqm", 0.0) > 0 and not warnings:
         status = "Success"
@@ -779,6 +911,9 @@ def extract_marathi_property_details(
     project_col: Optional[str] = None,
     tower_col: Optional[str] = None,
     unit_col: Optional[str] = None,
+    fallback_area_sqft: Optional[float] = None,
 ) -> Dict[str, Any]:
-    result = parse_property_description(raw_text, row_context, project_col, tower_col, unit_col)
+    result = parse_property_description(
+        raw_text, row_context, project_col, tower_col, unit_col, fallback_area_sqft
+    )
     return result.as_output_row()
