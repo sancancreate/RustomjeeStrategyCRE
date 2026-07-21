@@ -96,6 +96,32 @@ if uploaded_file is not None:
             value=True,
         )
 
+        # Some IGR extracts include a separate numeric 'Area' column
+        # (in sq ft) alongside the free-text description — and not every
+        # row's description actually states the area in words. When such
+        # a column exists, offer to use it as a fallback so those rows
+        # aren't left unparsed.
+        area_col_guess = locate_column_by_keywords(df, ["area (sq", "area(sq", "carpet area", "area"])
+        numeric_area_cols = [
+            c for c in all_columns
+            if pd.api.types.is_numeric_dtype(df[c]) if c in df.columns
+        ]
+        use_area_fallback = False
+        selected_area_fallback_column = None
+        if numeric_area_cols:
+            use_area_fallback = st.checkbox(
+                "This file has a separate numeric Area column — use it as a fallback "
+                "when the description text itself doesn't state an area",
+                value=bool(area_col_guess in numeric_area_cols) if area_col_guess else False,
+            )
+            if use_area_fallback:
+                default_idx = numeric_area_cols.index(area_col_guess) if area_col_guess in numeric_area_cols else 0
+                selected_area_fallback_column = st.selectbox(
+                    "Fallback Area column (assumed to be in sq ft):",
+                    options=numeric_area_cols,
+                    index=default_idx,
+                )
+
         if st.button("🚀 Process and Segregate Data", type="primary"):
             processed_rows = []
             debug_rows = []
@@ -109,12 +135,22 @@ if uploaded_file is not None:
             for idx, row in df.iterrows():
                 raw_text = row[selected_desc_column]
 
+                fallback_val = None
+                if use_area_fallback and selected_area_fallback_column:
+                    raw_fallback = row[selected_area_fallback_column]
+                    if pd.notna(raw_fallback):
+                        try:
+                            fallback_val = float(raw_fallback)
+                        except (TypeError, ValueError):
+                            fallback_val = None
+
                 result = parse_property_description(
                     raw_text=raw_text,
                     row_context=row,
                     project_col=selected_proj_column,
                     tower_col=selected_tower_column,
                     unit_col=selected_unit_column,
+                    fallback_area_sqft=fallback_val,
                 )
                 processed_rows.append(result.as_output_row())
                 if include_debug_report:
