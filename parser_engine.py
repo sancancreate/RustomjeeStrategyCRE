@@ -73,6 +73,8 @@ FEET_UNIT = r"(?:चौ\s*\.?\s*फु(?:ट)?\s*\.?|चौ\s*\.?\s*फूट|sq
 ANY_UNIT = rf"(?:{METER_UNIT}|{FEET_UNIT})"
 
 NUM = r"\d+(?:\.\d+)?"
+# 'area' word — covers both क्षेत्र and its common inflection क्षेत्रफळ
+AREA_WORD = r"क्षेत्र(?:फळ)?"
 
 # Keyword vocab used across strategies (kept centralised for maintainability)
 KW_CARPET = r"(?:रेरा\s*कारपेट|कारपेट|कार्पेट|चटई)"
@@ -229,6 +231,30 @@ def _safe_float(s: str) -> Optional[float]:
         return None
 
 
+def _find_labeled_area(text: str, label_re: str) -> Optional[Tuple[float, str]]:
+    """
+    Finds a NUM+UNIT associated with a label, regardless of whether the
+    label appears before the number (optionally with 1-3 filler words in
+    between, e.g. 'बाल्कनी स्पेस क्षेत्रफळ 36 चौ. फुट') or after it
+    (e.g. 'क्षेत्रफळ 832 चौ. फुट कार्पेट').
+    """
+    forward = re.compile(
+        rf"{label_re}(?:\s+[^\s,.]+){{0,3}}?\s*{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?",
+        re.IGNORECASE,
+    )
+    backward = re.compile(
+        rf"{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+[^\s,.]+){{0,2}}?\s*{label_re}",
+        re.IGNORECASE,
+    )
+    for pat in (forward, backward):
+        m = pat.search(text)
+        if m:
+            val = _safe_float(m.group(1))
+            if val is not None:
+                return val, (m.group(2) or "")
+    return None
+
+
 class AreaStrategy:
     """Base class for a single detectable IGR area-description layout."""
 
@@ -321,19 +347,15 @@ class BalconyUtilityBreakdownStrategy(AreaStrategy):
 
     name = "CARPET_BALCONY_UTILITY"
 
-    _CARPET_RE = re.compile(rf"{KW_CARPET}\s*(?:एरिया|क्षेत्र|area)?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?", re.IGNORECASE)
-    _BALCONY_RE = re.compile(rf"{KW_BALCONY}\s*(?:एरिया|क्षेत्र|area)?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?", re.IGNORECASE)
-    _UTILITY_RE = re.compile(rf"{KW_UTILITY}\s*(?:एरिया|क्षेत्र|area)?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?", re.IGNORECASE)
-
     def try_extract(self, text: str) -> Optional[Dict[str, float]]:
-        b = self._BALCONY_RE.search(text)
-        u = self._UTILITY_RE.search(text)
+        b = _find_labeled_area(text, KW_BALCONY)
+        u = _find_labeled_area(text, KW_UTILITY)
         if not (b or u):
             return None
-        c = self._CARPET_RE.search(text)
-        carpet_sqm = _to_sqm(_safe_float(c.group(1)) or 0.0, c.group(2) or "") if c else 0.0
-        balcony_sqm = _to_sqm(_safe_float(b.group(1)) or 0.0, b.group(2) or "") if b else 0.0
-        utility_sqm = _to_sqm(_safe_float(u.group(1)) or 0.0, u.group(2) or "") if u else 0.0
+        c = _find_labeled_area(text, KW_CARPET)
+        carpet_sqm = _to_sqm(c[0], c[1]) if c else 0.0
+        balcony_sqm = _to_sqm(b[0], b[1]) if b else 0.0
+        utility_sqm = _to_sqm(u[0], u[1]) if u else 0.0
         if carpet_sqm == 0.0 and balcony_sqm == 0.0 and utility_sqm == 0.0:
             return None
         return {
@@ -356,8 +378,8 @@ class ExplicitTotalOnlyStrategy(AreaStrategy):
 
     _PATTERNS = [
         re.compile(rf"{KW_TOTAL}\s*[-:]?\s*({NUM})\s*({ANY_UNIT})", re.IGNORECASE),
-        re.compile(rf"क्षेत्र\s*[-:]?\s*({NUM})\s*({ANY_UNIT})\s*(?:रेरा\s*)?{KW_CARPET}", re.IGNORECASE),
-        re.compile(rf"{KW_CARPET}\s*(?:एरिया|क्षेत्र)?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})", re.IGNORECASE),
+        re.compile(rf"{AREA_WORD}\s*[-:]?\s*({NUM})\s*({ANY_UNIT})\s*(?:रेरा\s*)?{KW_CARPET}", re.IGNORECASE),
+        re.compile(rf"{KW_CARPET}\s*(?:एरिया|{AREA_WORD})?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})", re.IGNORECASE),
         re.compile(rf"Area\s*of\s*Constructed\s*Property\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})", re.IGNORECASE),
     ]
 
@@ -370,6 +392,18 @@ class ExplicitTotalOnlyStrategy(AreaStrategy):
             if val is None:
                 continue
             total_sqm = _to_sqm(val, m.group(2))
+            return {
+                "carpet_sqm": total_sqm,
+                "attached_sqm": 0.0,
+                "balcony_sqm": 0.0,
+                "utility_sqm": 0.0,
+                "total_sqm": total_sqm,
+            }
+        # Fallback: label-flexible search (handles filler words / label
+        # appearing after the number, e.g. 'सदनिकेचे क्षेत्रफळ 832 चौ. फुट कार्पेट')
+        found = _find_labeled_area(text, KW_CARPET)
+        if found:
+            total_sqm = _to_sqm(found[0], found[1])
             return {
                 "carpet_sqm": total_sqm,
                 "attached_sqm": 0.0,
@@ -554,7 +588,8 @@ class FieldExtractor:
 
     _WING_DASH_RE = re.compile(r"विंग\s*-\s*([A-Za-zअ-ह0-9]+)", re.IGNORECASE)
     _WING_PREFIX_RE = re.compile(r"\b([A-Za-zअ-ह])\s*विंग\b", re.IGNORECASE)
-    _TOWER_LETTER_RE = re.compile(r"टॉवर\s+([A-Za-zअ-ह])\b", re.IGNORECASE)
+    _TOWER_NO_RE = re.compile(r"टॉवर\s*(?:नं|क्र|क्रमांक)\.?\s*([A-Za-z0-9अ-ह]+)", re.IGNORECASE)
+    _TOWER_LETTER_RE = re.compile(r"टॉवर\s+(?!नं|क्र)([A-Za-zअ-ह])\b", re.IGNORECASE)
     _BUILDING_NO_RE = re.compile(
         r"(?:बिल्डिंग|बिल्डींग)\s*(?:नं|क्र|क्रमांक|नंबर)?\.?\s*([A-Za-z0-9\-]+)", re.IGNORECASE
     )
@@ -589,7 +624,7 @@ class FieldExtractor:
         if row_context is not None and tower_col and tower_col in row_context and pd.notna(row_context[tower_col]):
             val = str(row_context[tower_col]).strip()
             return val[:-2] if val.endswith(".0") else val
-        for pat in (cls._WING_DASH_RE, cls._WING_PREFIX_RE, cls._TOWER_LETTER_RE, cls._BUILDING_NO_RE):
+        for pat in (cls._WING_DASH_RE, cls._WING_PREFIX_RE, cls._TOWER_NO_RE, cls._TOWER_LETTER_RE, cls._BUILDING_NO_RE):
             m = pat.search(text)
             if m:
                 return m.group(1).strip()
