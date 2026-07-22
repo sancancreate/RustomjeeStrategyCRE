@@ -240,6 +240,13 @@ _ALL_AREA_LABELS = {
     "total": KW_TOTAL,
 }
 
+# Words that introduce a NEW clause/item in a Marathi RERA sentence
+# ('as well as', 'along with', 'and'). A forward search from one label
+# must stop at these — otherwise it can walk straight past its own
+# label into the NEXT item's number (e.g. from 'बाल्कनी' it could
+# wrongly skip over 'तसेच' and grab the utility figure that follows).
+_CLAUSE_CONNECTORS = r"(?:तसेच|तसेंच|तसच|सोबत|आणि|तथा)"
+
 
 def _find_labeled_area(text: str, label_re: str, label_key: Optional[str] = None) -> Optional[Tuple[float, str]]:
     """
@@ -258,41 +265,54 @@ def _find_labeled_area(text: str, label_re: str, label_key: Optional[str] = None
     """
     other_labels = [pat for key, pat in _ALL_AREA_LABELS.items() if key != label_key]
     stop_re = "|".join(other_labels) if other_labels else None
+    # Forward search must additionally stop at clause connectors, since
+    # those introduce a different item's number entirely.
+    fwd_stop_re = f"{stop_re}|{_CLAUSE_CONNECTORS}" if stop_re else _CLAUSE_CONNECTORS
+
+    # Only the FIRST occurrence of the label is considered. Some IGR
+    # descriptions redundantly repeat a label (e.g. 'कार्पेट' stated once
+    # for the flat's own area and then again, oddly, right after the
+    # balcony figure) — anchoring to the first mention matches the natural
+    # reading order and avoids a later, spurious repeat of the label
+    # stealing the match away from the true figure.
+    label_match = re.search(label_re, text, re.IGNORECASE)
+    if label_match is None:
+        return None
 
     best: Optional[Tuple[float, str, int]] = None  # (value, unit, distance)
 
-    for label_match in re.finditer(label_re, text, re.IGNORECASE):
-        # ---- forward: label[+optional suffix] ... [<=3 filler words, no other label] NUM UNIT? ----
+    # ---- backward: NUM UNIT? [<=2 filler words, no other label] label ----
+    # Tried first: 'NUM UNIT descriptor LABEL' is the dominant, most
+    # reliable convention in this corpus (the label sits right after its
+    # own number).
+    before = text[max(0, label_match.start() - 60):label_match.start()]
+    bwd_pat = re.compile(
+        rf"(?:{AREA_WORD})?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+(?!{stop_re})[^\s,.]+){{0,2}}?\s*$"
+        if stop_re else
+        rf"(?:{AREA_WORD})?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+[^\s,.]+){{0,2}}?\s*$",
+        re.IGNORECASE,
+    )
+    bm = bwd_pat.search(before)
+    if bm and bm.group(1):
+        val = _safe_float(bm.group(1))
+        if val is not None:
+            distance = len(before) - bm.start(1)
+            best = (val, bm.group(2) or "", distance)
+
+    # ---- forward: label[+optional suffix] ... [<=3 filler words, no other label] NUM UNIT? ----
+    # Only used if backward found nothing, e.g. 'बाल्कनी स्पेस क्षेत्रफळ
+    # 36 चौ. फुट' (label comes before its number).
+    if best is None:
         after = text[label_match.end():label_match.end() + 60]
         fwd_pat = re.compile(
-            rf"^[^\s,.\d]{{0,4}}(?:\s+(?!{stop_re})[^\s,.]+){{0,3}}?\s*{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?"
-            if stop_re else
-            rf"^[^\s,.\d]{{0,4}}(?:\s+[^\s,.]+){{0,3}}?\s*{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?",
+            rf"^[^\s,.\d]{{0,4}}(?:\s+(?!{fwd_stop_re})[^\s,.]+){{0,3}}?\s*(?:{AREA_WORD})?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?",
             re.IGNORECASE,
         )
         fm = fwd_pat.match(after)
         if fm and fm.group(1):
             val = _safe_float(fm.group(1))
             if val is not None:
-                distance = fm.end(1)
-                if best is None or distance < best[2]:
-                    best = (val, fm.group(2) or "", distance)
-
-        # ---- backward: NUM UNIT? [<=2 filler words, no other label] label ----
-        before = text[max(0, label_match.start() - 60):label_match.start()]
-        bwd_pat = re.compile(
-            rf"{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+(?!{stop_re})[^\s,.]+){{0,2}}?\s*$"
-            if stop_re else
-            rf"{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+[^\s,.]+){{0,2}}?\s*$",
-            re.IGNORECASE,
-        )
-        bm = bwd_pat.search(before)
-        if bm and bm.group(1):
-            val = _safe_float(bm.group(1))
-            if val is not None:
-                distance = len(before) - bm.start(1)
-                if best is None or distance < best[2]:
-                    best = (val, bm.group(2) or "", distance)
+                best = (val, fm.group(2) or "", fm.start(1))
 
     if best:
         return best[0], best[1]
@@ -770,7 +790,8 @@ class FieldExtractor:
     _WING_DASH_RE = re.compile(r"विंग\s*-\s*([A-Za-zअ-ह0-9]+)", re.IGNORECASE)
     _WING_PREFIX_RE = re.compile(r"\b([A-Za-zअ-ह])\s*विंग\b", re.IGNORECASE)
     _TOWER_NO_RE = re.compile(r"टॉवर\s*(?:नं|क्र|क्रमांक)\.?\s*([A-Za-z0-9अ-ह]+)", re.IGNORECASE)
-    _TOWER_LETTER_RE = re.compile(r"टॉवर\s+(?!नं|क्र)([A-Za-zअ-ह])\b", re.IGNORECASE)
+    _TOWER_DASH_RE = re.compile(r"टॉवर\s*[-:]\s*([A-Za-z0-9अ-ह]+)", re.IGNORECASE)
+    _TOWER_LETTER_RE = re.compile(r"टॉवर\s+(?!नं|क्र)([A-Za-zअ-ह0-9]+)\b", re.IGNORECASE)
     _BUILDING_NO_RE = re.compile(
         r"(?:बिल्डिंग|बिल्डींग)\s*(?:नं|क्र|क्रमांक|नंबर)?\.?\s*([A-Za-z0-9\-]+)", re.IGNORECASE
     )
@@ -805,7 +826,7 @@ class FieldExtractor:
         if row_context is not None and tower_col and tower_col in row_context and pd.notna(row_context[tower_col]):
             val = str(row_context[tower_col]).strip()
             return val[:-2] if val.endswith(".0") else val
-        for pat in (cls._WING_DASH_RE, cls._WING_PREFIX_RE, cls._TOWER_NO_RE, cls._TOWER_LETTER_RE, cls._BUILDING_NO_RE):
+        for pat in (cls._WING_DASH_RE, cls._WING_PREFIX_RE, cls._TOWER_NO_RE, cls._TOWER_DASH_RE, cls._TOWER_LETTER_RE, cls._BUILDING_NO_RE):
             m = pat.search(text)
             if m:
                 return m.group(1).strip()
