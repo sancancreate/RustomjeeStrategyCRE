@@ -382,6 +382,12 @@ class ExplicitTotalOnlyStrategy(AreaStrategy):
         re.compile(rf"{KW_CARPET}\s*(?:एरिया|{AREA_WORD})?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})", re.IGNORECASE),
         re.compile(rf"Area\s*of\s*Constructed\s*Property\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})", re.IGNORECASE),
     ]
+    # A bare number directly followed by 'रेरा कारपेट' with NO unit token at
+    # all, e.g. '100.90 रेरा कारपेट'. Maharashtra RERA carpet-area figures
+    # are conventionally reported in sqm when no unit is given, so we treat
+    # this as sqm. Kept separate (and tried last) since it's a weaker,
+    # unit-less signal.
+    _BARE_RERA_CARPET_RE = re.compile(rf"\b({NUM})\s*रेरा\s*कारपेट", re.IGNORECASE)
 
     def try_extract(self, text: str) -> Optional[Dict[str, float]]:
         for pat in self._PATTERNS:
@@ -411,6 +417,19 @@ class ExplicitTotalOnlyStrategy(AreaStrategy):
                 "utility_sqm": 0.0,
                 "total_sqm": total_sqm,
             }
+        # Last resort: bare number immediately before 'रेरा कारपेट' with no
+        # unit token at all — assume sqm.
+        m = self._BARE_RERA_CARPET_RE.search(text)
+        if m:
+            val = _safe_float(m.group(1))
+            if val is not None and MIN_REALISTIC_SQM <= val <= MAX_REALISTIC_SQM:
+                return {
+                    "carpet_sqm": val,
+                    "attached_sqm": 0.0,
+                    "balcony_sqm": 0.0,
+                    "utility_sqm": 0.0,
+                    "total_sqm": val,
+                }
         return None
 
 
