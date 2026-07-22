@@ -231,27 +231,71 @@ def _safe_float(s: str) -> Optional[float]:
         return None
 
 
-def _find_labeled_area(text: str, label_re: str) -> Optional[Tuple[float, str]]:
+_ALL_AREA_LABELS = {
+    "carpet": KW_CARPET,
+    "balcony": KW_BALCONY,
+    "utility": KW_UTILITY,
+    "attached": KW_ATTACHED,
+    "ancillary": KW_ANCILLARY,
+    "total": KW_TOTAL,
+}
+
+
+def _find_labeled_area(text: str, label_re: str, label_key: Optional[str] = None) -> Optional[Tuple[float, str]]:
     """
     Finds a NUM+UNIT associated with a label, regardless of whether the
-    label appears before the number (optionally with 1-3 filler words in
-    between, e.g. 'बाल्कनी स्पेस क्षेत्रफळ 36 चौ. फुट') or after it
-    (e.g. 'क्षेत्रफळ 832 चौ. फुट कार्पेट').
+    label appears before the number (optionally with a couple of filler
+    words in between, e.g. 'बाल्कनी स्पेस क्षेत्रफळ 36 चौ. फुट') or after
+    it (e.g. 'क्षेत्रफळ 832 चौ. फुट कार्पेट').
+
+    Crucially, this must NOT cross into a *different* area-type label's
+    number — e.g. in '...801 चौ. फुट कारपेट सोबत बाल्कनीचे क्षेत्रफळ 30
+    चौ.मिटर', searching for the carpet figure must stop at 801 and never
+    walk forward past 'बाल्कनी' to grab the balcony's 30. So: for every
+    occurrence of the label, look a short distance backward and forward
+    for a number+unit, but reject any candidate whose path crosses a
+    different area-type label; then return the closest valid candidate.
     """
-    forward = re.compile(
-        rf"{label_re}(?:\s+[^\s,.]+){{0,3}}?\s*{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?",
-        re.IGNORECASE,
-    )
-    backward = re.compile(
-        rf"{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+[^\s,.]+){{0,2}}?\s*{label_re}",
-        re.IGNORECASE,
-    )
-    for pat in (forward, backward):
-        m = pat.search(text)
-        if m:
-            val = _safe_float(m.group(1))
+    other_labels = [pat for key, pat in _ALL_AREA_LABELS.items() if key != label_key]
+    stop_re = "|".join(other_labels) if other_labels else None
+
+    best: Optional[Tuple[float, str, int]] = None  # (value, unit, distance)
+
+    for label_match in re.finditer(label_re, text, re.IGNORECASE):
+        # ---- forward: label[+optional suffix] ... [<=3 filler words, no other label] NUM UNIT? ----
+        after = text[label_match.end():label_match.end() + 60]
+        fwd_pat = re.compile(
+            rf"^[^\s,.\d]{{0,4}}(?:\s+(?!{stop_re})[^\s,.]+){{0,3}}?\s*{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?"
+            if stop_re else
+            rf"^[^\s,.\d]{{0,4}}(?:\s+[^\s,.]+){{0,3}}?\s*{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?",
+            re.IGNORECASE,
+        )
+        fm = fwd_pat.match(after)
+        if fm and fm.group(1):
+            val = _safe_float(fm.group(1))
             if val is not None:
-                return val, (m.group(2) or "")
+                distance = fm.end(1)
+                if best is None or distance < best[2]:
+                    best = (val, fm.group(2) or "", distance)
+
+        # ---- backward: NUM UNIT? [<=2 filler words, no other label] label ----
+        before = text[max(0, label_match.start() - 60):label_match.start()]
+        bwd_pat = re.compile(
+            rf"{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+(?!{stop_re})[^\s,.]+){{0,2}}?\s*$"
+            if stop_re else
+            rf"{AREA_WORD}?\s*[-:=]?\s*({NUM})\s*({ANY_UNIT})?(?:\s+[^\s,.]+){{0,2}}?\s*$",
+            re.IGNORECASE,
+        )
+        bm = bwd_pat.search(before)
+        if bm and bm.group(1):
+            val = _safe_float(bm.group(1))
+            if val is not None:
+                distance = len(before) - bm.start(1)
+                if best is None or distance < best[2]:
+                    best = (val, bm.group(2) or "", distance)
+
+    if best:
+        return best[0], best[1]
     return None
 
 
@@ -348,11 +392,11 @@ class BalconyUtilityBreakdownStrategy(AreaStrategy):
     name = "CARPET_BALCONY_UTILITY"
 
     def try_extract(self, text: str) -> Optional[Dict[str, float]]:
-        b = _find_labeled_area(text, KW_BALCONY)
-        u = _find_labeled_area(text, KW_UTILITY)
+        b = _find_labeled_area(text, KW_BALCONY, 'balcony')
+        u = _find_labeled_area(text, KW_UTILITY, 'utility')
         if not (b or u):
             return None
-        c = _find_labeled_area(text, KW_CARPET)
+        c = _find_labeled_area(text, KW_CARPET, 'carpet')
         carpet_sqm = _to_sqm(c[0], c[1]) if c else 0.0
         balcony_sqm = _to_sqm(b[0], b[1]) if b else 0.0
         utility_sqm = _to_sqm(u[0], u[1]) if u else 0.0
@@ -407,7 +451,7 @@ class ExplicitTotalOnlyStrategy(AreaStrategy):
             }
         # Fallback: label-flexible search (handles filler words / label
         # appearing after the number, e.g. 'सदनिकेचे क्षेत्रफळ 832 चौ. फुट कार्पेट')
-        found = _find_labeled_area(text, KW_CARPET)
+        found = _find_labeled_area(text, KW_CARPET, 'carpet')
         if found:
             total_sqm = _to_sqm(found[0], found[1])
             return {
@@ -517,8 +561,8 @@ class NarrativeConversionCarpetStrategy(AreaStrategy):
         # Balcony / utility are often given separately later in the same
         # sentence ('सोबत X चौ.मी. क्षेत्रफळाची बाल्कनी', 'तसेच Y चौ.मी.
         # क्षेत्रफळाचे युटीलिटी एरिया'); reuse the flexible label finder.
-        b = _find_labeled_area(text, KW_BALCONY)
-        u = _find_labeled_area(text, KW_UTILITY)
+        b = _find_labeled_area(text, KW_BALCONY, 'balcony')
+        u = _find_labeled_area(text, KW_UTILITY, 'utility')
         balcony_sqm = _to_sqm(b[0], b[1]) if b else 0.0
         utility_sqm = _to_sqm(u[0], u[1]) if u else 0.0
 
@@ -661,6 +705,18 @@ class Validator:
                 warnings.append(
                     f"Total ({total:.2f}) does not reconcile with parts sum ({parts_sum:.2f})"
                 )
+
+        # A balcony/utility figure larger than the carpet figure is
+        # statistically unusual (balconies/utility areas are almost always
+        # much smaller than the carpet area) and often signals ambiguous
+        # or inconsistently worded source text — flag for human review
+        # rather than silently trusting the extraction.
+        if carpet > 0:
+            if areas.get("balcony_sqm", 0.0) > carpet:
+                warnings.append("Balcony area exceeds carpet area — verify against source text")
+            if areas.get("utility_sqm", 0.0) > carpet:
+                warnings.append("Utility area exceeds carpet area — verify against source text")
+
         return warnings
 
 
